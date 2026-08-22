@@ -1,0 +1,8 @@
+# Игнорируем тяжелые ресурсы
+assets/fonts/
+images/
+audio/
+# Игнорируем папки зависимостей и сборки
+node_modules/
+dist/
+build/

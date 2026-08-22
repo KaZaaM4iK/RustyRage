@@ -1,0 +1,29 @@
+--- a/physx/source/compiler/cmake/PlatformSpecific.cmake
++++ b/physx/source/compiler/cmake/PlatformSpecific.cmake
+@@ -10,6 +10,7 @@
+     set(PX_LINUX ON)
+ elseif(${CMAKE_SYSTEM_NAME} MATCHES "Windows")
+     set(PX_WINDOWS ON)
++elseif(${CMAKE_SYSTEM_NAME} MATCHES "FreeBSD")
++    set(PX_FREEBSD ON)
+ endif()
+
+--- a/physx/source/geomutils/src/GuSIMDHelpers.h
++++ b/physx/source/geomutils/src/GuSIMDHelpers.h
+@@ -20,6 +20,9 @@
+ #elif defined(__linux__)
+     #define PX_LINUX 1
+     #define PX_UNIX 1
++#elif defined(__FreeBSD__)
++    #define PX_FREEBSD 1
++    #define PX_UNIX 1
+ #endif
+
+--- a/physx/source/compiler/cmake/GenerateProjects.sh
++++ b/physx/source/compiler/cmake/GenerateProjects.sh
+@@ -50,6 +50,7 @@
+     -DPX_GENERATE_STATIC_LIBRARIES=ON \
+     -DCMAKE_BUILD_TYPE=Debug \
+     -DCMAKE_CXX_STANDARD=17 \
++    -DPX_FREEBSD=$([ "$(uname)" = "FreeBSD" ] && echo "ON" || echo "OFF") \
+     ..
