@@ -41,7 +41,7 @@ void EditorRenderer::renderScene(const MapData &mapData,
                                  const EditorCamera &camera,
                                  const std::string &selectedId,
                                  int selectedTrackPoint) {
-  SDL_SetRenderDrawColor(m_renderer, 18, 22, 30, 255);
+  SDL_SetRenderDrawColor(m_renderer, 15, 18, 26, 255);
   SDL_FRect viewport{static_cast<float>(m_viewportX),
                      static_cast<float>(m_viewportY),
                      static_cast<float>(m_viewportWidth),
@@ -52,30 +52,41 @@ void EditorRenderer::renderScene(const MapData &mapData,
   drawBoundary(mapData, camera);
   drawTrack(mapData, camera, selectedTrackPoint);
 
+  // Draw UGC Trigger Zones
+  for (const auto &zone : mapData.ugcRules.triggerZones) {
+    drawTriggerZone(zone, camera);
+  }
+
+  // Draw Base Structures & Defenses
+  for (const auto &structDef : mapData.structures) {
+    drawStructure(structDef, camera, structDef.id == selectedId);
+  }
+
+  // Draw Game Objects (spawns, weapons, hazards)
   for (const MapObject &object : mapData.objects) {
     drawObject(object, camera, object.id == selectedId);
   }
 }
 
 void EditorRenderer::drawGrid(const EditorCamera &camera) {
-  const int halfSize = 20;
+  const int halfSize = 25;
   const float spacing = 10.0f;
   for (int i = -halfSize; i <= halfSize; ++i) {
     const float coord = i * spacing;
     const bool major = (i % 5) == 0;
-    const Uint8 shade = major ? 70 : 45;
+    const Uint8 shade = major ? 65 : 35;
     drawLine3D(glm::vec3(-halfSize * spacing, 0.0f, coord),
                glm::vec3(halfSize * spacing, 0.0f, coord), camera, shade, shade,
-               shade + 10);
+               shade + 15);
     drawLine3D(glm::vec3(coord, 0.0f, -halfSize * spacing),
                glm::vec3(coord, 0.0f, halfSize * spacing), camera, shade, shade,
-               shade + 10);
+               shade + 15);
   }
 
   drawLine3D(glm::vec3(0.0f, 0.0f, -halfSize * spacing),
-             glm::vec3(0.0f, 0.0f, halfSize * spacing), camera, 90, 90, 140);
+             glm::vec3(0.0f, 0.0f, halfSize * spacing), camera, 80, 100, 220);
   drawLine3D(glm::vec3(-halfSize * spacing, 0.0f, 0.0f),
-             glm::vec3(halfSize * spacing, 0.0f, 0.0f), camera, 140, 90, 90);
+             glm::vec3(halfSize * spacing, 0.0f, 0.0f), camera, 220, 80, 80);
 }
 
 void EditorRenderer::drawBoundary(const MapData &mapData,
@@ -92,8 +103,35 @@ void EditorRenderer::drawBoundary(const MapData &mapData,
                             {6, 7}, {7, 4}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
 
   for (const auto &edge : edges) {
-    drawLine3D(corners[edge[0]], corners[edge[1]], camera, 60, 100, 130, 180);
+    drawLine3D(corners[edge[0]], corners[edge[1]], camera, 50, 90, 120, 150);
   }
+}
+
+void EditorRenderer::drawStructure(const StructureDef &structure,
+                                   const EditorCamera &camera, bool selected) {
+  Uint8 r = static_cast<Uint8>(structure.tintColor.r * 255);
+  Uint8 g = static_cast<Uint8>(structure.tintColor.g * 255);
+  Uint8 b = static_cast<Uint8>(structure.tintColor.b * 255);
+
+  drawBox3D(structure.position, structure.boundingBoxSize, camera, r, g, b);
+
+  // If turret, draw firing range circle and aiming barrel
+  if (structure.category == StructureCategory::Turret) {
+    drawCircle3D(structure.position, structure.attackRange, camera, r, g, b);
+    glm::vec3 barrelEnd = structure.position + glm::vec3(0.0f, 3.0f, 3.5f);
+    drawLine3D(structure.position + glm::vec3(0.0f, 3.0f, 0.0f), barrelEnd, camera, 255, 255, 100);
+  }
+
+  if (selected) {
+    drawBox3D(structure.position, structure.boundingBoxSize + glm::vec3(0.8f), camera, 255, 255, 255);
+    drawCircle3D(structure.position, structure.boundingBoxSize.x + 2.0f, camera, 255, 255, 100);
+  }
+}
+
+void EditorRenderer::drawTriggerZone(const UgcTriggerZone &zone,
+                                     const EditorCamera &camera) {
+  drawBox3D(zone.center, zone.extents, camera, 100, 200, 255, 140);
+  drawCross3D(zone.center, 2.0f, camera, 100, 200, 255);
 }
 
 void EditorRenderer::drawObject(const MapObject &object,
@@ -102,72 +140,41 @@ void EditorRenderer::drawObject(const MapObject &object,
   switch (object.type) {
   case MapObjectType::SpawnPoint:
     if (object.row <= 1) {
-      r = 80;
-      g = 255;
-      b = 120; // ряд 1 — сильные / впереди
+      r = 80; g = 255; b = 120;
     } else {
-      r = 80;
-      g = 160;
-      b = 255; // ряд 2 — сзади
+      r = 80; g = 160; b = 255;
     }
     break;
   case MapObjectType::Checkpoint:
     r = object.isFinishLine ? 80 : 80;
-    g = object.isFinishLine ? 220 : 140;
-    b = object.isFinishLine ? 220 : 255;
+    g = object.isFinishLine ? 240 : 140;
+    b = object.isFinishLine ? 240 : 255;
     break;
   case MapObjectType::PowerUpSpawn:
     switch (powerUpKindFromInt(object.subtype)) {
-    case PowerUpKind::Missile:
-      r = 255;
-      g = 80;
-      b = 80;
-      break;
-    case PowerUpKind::Mine:
-      r = 180;
-      g = 60;
-      b = 200;
-      break;
-    case PowerUpKind::OilSlick:
-      r = 80;
-      g = 80;
-      b = 80;
-      break;
-    case PowerUpKind::Shield:
-      r = 80;
-      g = 180;
-      b = 255;
-      break;
-    case PowerUpKind::Nitro:
-      r = 80;
-      g = 255;
-      b = 120;
-      break;
-    default:
-      r = 255;
-      g = 160;
-      b = 40;
-      break;
+    case PowerUpKind::Missile: r = 255; g = 80; b = 80; break;
+    case PowerUpKind::Mine: r = 200; g = 60; b = 220; break;
+    case PowerUpKind::OilSlick: r = 60; g = 60; b = 60; break;
+    case PowerUpKind::Shield: r = 80; g = 180; b = 255; break;
+    case PowerUpKind::Nitro: r = 80; g = 255; b = 120; break;
+    case PowerUpKind::RepairKit: r = 40; g = 220; b = 180; break;
+    case PowerUpKind::AirStrike: r = 255; g = 160; b = 40; break;
+    default: r = 255; g = 180; b = 60; break;
     }
     break;
+  case MapObjectType::HazardCrusher:
+    r = 255; g = 60; b = 60; break;
+  case MapObjectType::JumpPad:
+    r = 255; g = 220; b = 40; break;
   case MapObjectType::Destructible:
-    r = 220;
-    g = 70;
-    b = 70;
-    break;
+    r = 220; g = 70; b = 70; break;
   case MapObjectType::Obstacle:
-    r = 160;
-    g = 120;
-    b = 80;
-    break;
-  case MapObjectType::Decoration:
-    r = 150;
-    g = 150;
-    b = 170;
-    break;
+    r = 160; g = 120; b = 80; break;
+  default:
+    r = 150; g = 150; b = 170; break;
   }
 
-  const float markerSize = selected ? 4.0f : 3.0f;
+  const float markerSize = selected ? 4.5f : 3.0f;
   drawCross3D(object.position, markerSize, camera, r, g, b);
 
   if (object.type == MapObjectType::Checkpoint) {
@@ -220,25 +227,37 @@ void EditorRenderer::drawTrack(const MapData &mapData,
 
     const float ah = a.width * 0.5f;
     const float bh = b.width * 0.5f;
+
+    // Track surface coloring
+    Uint8 trR = 90, trG = 200, trB = 90;
+    switch (a.surface) {
+      case TrackSurfaceType::Dirt: trR = 190; trG = 140; trB = 70; break;
+      case TrackSurfaceType::Mud: trR = 130; trG = 90; trB = 50; break;
+      case TrackSurfaceType::Ice: trR = 120; trG = 230; trB = 255; break;
+      case TrackSurfaceType::MetalGrate: trR = 230; trG = 210; trB = 80; break;
+      case TrackSurfaceType::BoostSurface: trR = 255; trG = 130; trB = 30; break;
+      default: trR = 140; trG = 160; trB = 180; break;
+    }
+
     drawTrackSegment(a.position - fa.second * ah, a.position + fa.second * ah,
                      b.position - fb.second * bh, b.position + fb.second * bh,
-                     camera, 90, 200, 90, 200);
+                     camera, trR, trG, trB, 220);
 
     const float extA = ah + 4.0f;
     const float extB = bh + 4.0f;
     drawLine3D(a.position - fa.second * extA, b.position - fb.second * extB,
-               camera, 110, 110, 110, 160);
+               camera, 120, 120, 130, 160);
     drawLine3D(a.position + fa.second * extA, b.position + fb.second * extB,
-               camera, 110, 110, 110, 160);
+               camera, 120, 120, 130, 160);
   }
 
   for (int i = 0; i < n; ++i) {
     const TrackPoint &p = mapData.trackPoints[i];
     const bool isSelected = (i == selectedPoint);
-    const Uint8 r = isSelected ? 255 : (i == 0 ? 255 : 180);
+    const Uint8 r = isSelected ? 255 : (i == 0 ? 255 : 200);
     const Uint8 g = isSelected ? 255 : (i == 0 ? 220 : 200);
-    const Uint8 b = isSelected ? 255 : (i == 0 ? 120 : 80);
-    const float size = isSelected ? 3.0f : 2.0f;
+    const Uint8 b = isSelected ? 255 : (i == 0 ? 120 : 90);
+    const float size = isSelected ? 3.5f : 2.0f;
     drawLine3D(p.position + glm::vec3(0, size, 0),
                p.position + glm::vec3(size, 0, 0), camera, r, g, b);
     drawLine3D(p.position + glm::vec3(size, 0, 0),
@@ -252,11 +271,37 @@ void EditorRenderer::drawTrack(const MapData &mapData,
       const float half = p.width * 0.5f;
       drawLine3D(p.position - f.second * half, p.position + f.second * half,
                  camera, 255, 255, 80);
-      drawCircle3D(p.position, 1.5f, camera, 255, 255, 80);
+      drawCircle3D(p.position, 1.8f, camera, 255, 255, 80);
     }
     if (p.isFinish) {
-      drawCircle3D(p.position, 2.5f, camera, 80, 220, 220);
+      drawCircle3D(p.position, 3.0f, camera, 80, 240, 240);
     }
+  }
+}
+
+void EditorRenderer::drawBox3D(const glm::vec3 &center, const glm::vec3 &extents,
+                               const EditorCamera &camera, Uint8 r, Uint8 g,
+                               Uint8 b, Uint8 a) {
+  glm::vec3 half = extents * 0.5f;
+  glm::vec3 c[8] = {
+    center + glm::vec3(-half.x, -half.y, -half.z),
+    center + glm::vec3( half.x, -half.y, -half.z),
+    center + glm::vec3( half.x, -half.y,  half.z),
+    center + glm::vec3(-half.x, -half.y,  half.z),
+    center + glm::vec3(-half.x,  half.y, -half.z),
+    center + glm::vec3( half.x,  half.y, -half.z),
+    center + glm::vec3( half.x,  half.y,  half.z),
+    center + glm::vec3(-half.x,  half.y,  half.z)
+  };
+
+  int edges[12][2] = {
+    {0,1}, {1,2}, {2,3}, {3,0},
+    {4,5}, {5,6}, {6,7}, {7,4},
+    {0,4}, {1,5}, {2,6}, {3,7}
+  };
+
+  for (const auto &e : edges) {
+    drawLine3D(c[e[0]], c[e[1]], camera, r, g, b, a);
   }
 }
 

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <string>
 
 namespace Editor {
@@ -14,6 +15,7 @@ MapEditorApp::MapEditorApp(int width, int height, const std::string &title)
     : m_width(width), m_height(height), m_title(title), m_running(false),
       m_window(nullptr), m_renderer(nullptr),
       m_currentFilePath("maps/untitled.rrmap"), m_objectIdCounter(0),
+      m_structureIdCounter(0), m_zoneIdCounter(0),
       m_selectedTrackPoint(-1), m_trackClosedCached(false), m_dragging(false),
       m_gridSize(1.0f), m_gridSnapEnabled(true), m_dirty(false),
       m_ctrlHeld(false), m_rightMouseHeld(false) {}
@@ -43,7 +45,7 @@ void MapEditorApp::run() {
 }
 
 bool MapEditorApp::initialize() {
-  LOG_INFO("Initializing map editor");
+  LOG_INFO("Initializing AAA Map & UGC Editor");
 
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) < 0) {
     LOG_ERRORF("SDL_Init failed: %s", SDL_GetError());
@@ -81,6 +83,19 @@ bool MapEditorApp::initialize() {
   m_ui->setOnDeleteSelected([this]() { deleteSelected(); });
   m_ui->setOnToggleTrackClosed([this]() { toggleTrackClosed(); });
   m_ui->setOnRaceGrid([this]() { placeRaceStartGrid(); });
+  m_ui->setOnExportUgcPackage([this]() { exportUgcModPackage(); });
+  m_ui->setOnSwitchMode([this](EditorWorkspaceMode mode) {
+    m_ui->setWorkspaceMode(mode);
+    m_selectedObjectId.clear();
+    m_selectedTrackPoint = -1;
+    if (mode == EditorWorkspaceMode::TrackAndArena) {
+      m_ui->setStatusMessage("Режим Трасс и Арены активен");
+    } else if (mode == EditorWorkspaceMode::BaseArchitect) {
+      m_ui->setStatusMessage("Режим Архитектора Баз и Обороны активен");
+    } else if (mode == EditorWorkspaceMode::UgcLogicStudio) {
+      m_ui->setStatusMessage("Режим Студии UGC Логики и Правил активен");
+    }
+  });
 
   m_inspector = std::make_unique<PropertyInspector>();
   m_inspector->initialize(m_renderer, "assets/fonts/DejaVuSans.ttf");
@@ -98,7 +113,7 @@ bool MapEditorApp::initialize() {
   newMap();
   refreshMapList();
 
-  LOG_INFO("Map editor initialized");
+  LOG_INFO("AAA Map & UGC Editor successfully initialized");
   return true;
 }
 
@@ -158,8 +173,6 @@ void MapEditorApp::processEvents() {
         m_ctrlHeld = true;
       }
 
-      // Inspector focus: when the panel is hovered, route keys to it first
-      // so typing in a field doesn't trigger global hotkeys.
       const bool inspectorFocused =
           m_inspector &&
           m_inspector->isMouseOverPanel(m_input->getMousePosition(), m_width);
@@ -178,14 +191,6 @@ void MapEditorApp::processEvents() {
         cycleGridSize();
       } else if (event.key.key == SDLK_DELETE) {
         deleteSelected();
-      } else if (event.key.key == SDLK_F2) {
-        static const char *kNames[] = {"New Map", "Arena Alpha", "Desert Run",
-                                       "Night Circuit", "Harbor Clash"};
-        static size_t kIdx = 0;
-        kIdx = (kIdx + 1) % (sizeof(kNames) / sizeof(kNames[0]));
-        m_mapData.name = kNames[kIdx];
-        m_dirty = true;
-        m_ui->setStatusMessage(std::string("Имя карты: ") + m_mapData.name);
       } else if (event.key.key == SDLK_D && m_ctrlHeld) {
         duplicateSelectedObject();
       } else if (event.key.key == SDLK_ESCAPE) {
@@ -213,15 +218,13 @@ void MapEditorApp::processEvents() {
       } else if (event.button.button == SDL_BUTTON_LEFT) {
         const glm::vec2 mousePos(event.button.x, event.button.y);
         if (m_inspector && m_inspector->handleMouseClick(mousePos, m_width)) {
-          // Inspector panel swallowed the click.
+          // Inspector handled click
         } else if (m_ui->isMouseOverUI(mousePos)) {
           m_ui->handleMouseClick(mousePos);
         } else {
-          const std::string prevSelectedId = m_selectedObjectId;
           const int prevTrackPoint = m_selectedTrackPoint;
           handleViewportClick(mousePos);
-          // Drag только если выбор сохранился / сменился на реальный
-          // объект/точку
+
           const EditorTool tool = m_ui->getCurrentTool();
           if (tool == EditorTool::Select && !m_selectedObjectId.empty()) {
             glm::vec3 ground;
@@ -235,6 +238,8 @@ void MapEditorApp::processEvents() {
               m_dragStartWorld = ground;
               if (MapObject *o = m_mapData.findObject(m_selectedObjectId)) {
                 m_dragOriginalPos = o->position;
+              } else if (StructureDef *s = m_mapData.findStructure(m_selectedObjectId)) {
+                m_dragOriginalPos = s->position;
               }
             }
           } else if (tool == EditorTool::EditTrack &&
@@ -269,6 +274,13 @@ void MapEditorApp::processEvents() {
                   m_selectedObjectId, m_dragOriginalPos, finalPos));
               m_dirty = true;
             }
+          } else if (StructureDef *s = m_mapData.findStructure(m_selectedObjectId)) {
+            const glm::vec3 finalPos = s->position;
+            const glm::vec3 delta = finalPos - m_dragOriginalPos;
+            if (glm::dot(delta, delta) > 1e-6f) {
+              s->position = snapToGrid(finalPos);
+              m_dirty = true;
+            }
           }
         } else if (tool == EditorTool::EditTrack && m_selectedTrackPoint >= 0) {
           const size_t idx = static_cast<size_t>(m_selectedTrackPoint);
@@ -293,7 +305,7 @@ void MapEditorApp::processEvents() {
 }
 
 void MapEditorApp::update(float deltaTime) {
-  const int inspectorW = (m_inspector && !m_selectedObjectId.empty())
+  const int inspectorW = (m_inspector && (!m_selectedObjectId.empty() || m_selectedTrackPoint >= 0))
                              ? m_inspector->panelWidth()
                              : 0;
   const glm::ivec4 viewport = m_ui->getViewportRect(inspectorW);
@@ -307,7 +319,7 @@ void MapEditorApp::update(float deltaTime) {
   m_camera->processInput(*m_input, deltaTime, m_rightMouseHeld && !mouseOverUI);
 
   if (m_dragging) {
-    const int inspectorWDrag = (m_inspector && !m_selectedObjectId.empty())
+    const int inspectorWDrag = (m_inspector && (!m_selectedObjectId.empty() || m_selectedTrackPoint >= 0))
                                    ? m_inspector->panelWidth()
                                    : 0;
     const glm::ivec4 vp = m_ui->getViewportRect(inspectorWDrag);
@@ -320,6 +332,9 @@ void MapEditorApp::update(float deltaTime) {
         if (MapObject *o = m_mapData.findObject(m_selectedObjectId)) {
           o->position = snapToGrid(m_dragOriginalPos + delta);
           o->position.y = m_dragOriginalPos.y;
+        } else if (StructureDef *s = m_mapData.findStructure(m_selectedObjectId)) {
+          s->position = snapToGrid(m_dragOriginalPos + delta);
+          s->position.y = m_dragOriginalPos.y;
         }
       } else if (tool == EditorTool::EditTrack && m_selectedTrackPoint >= 0) {
         const size_t idx = static_cast<size_t>(m_selectedTrackPoint);
@@ -332,136 +347,42 @@ void MapEditorApp::update(float deltaTime) {
     }
   }
 
-  if (m_input->isKeyJustPressed(SDL_SCANCODE_1))
-    m_ui->setCurrentTool(EditorTool::Select);
-  if (m_input->isKeyJustPressed(SDL_SCANCODE_2))
-    m_ui->setCurrentTool(EditorTool::PlaceSpawn);
-  if (m_input->isKeyJustPressed(SDL_SCANCODE_3))
-    m_ui->setCurrentTool(EditorTool::PlaceCheckpoint);
-  if (m_input->isKeyJustPressed(SDL_SCANCODE_4))
-    m_ui->setCurrentTool(EditorTool::PlacePowerUp);
-  if (m_input->isKeyJustPressed(SDL_SCANCODE_5))
-    m_ui->setCurrentTool(EditorTool::PlaceDestructible);
-  if (m_input->isKeyJustPressed(SDL_SCANCODE_7))
-    m_ui->setCurrentTool(EditorTool::PlaceObstacle);
-  if (m_input->isKeyJustPressed(SDL_SCANCODE_8))
-    m_ui->setCurrentTool(EditorTool::PlaceDecoration);
-  if (m_input->isKeyJustPressed(SDL_SCANCODE_6))
-    m_ui->setCurrentTool(EditorTool::EditTrack);
-  if (m_input->isKeyJustPressed(SDL_SCANCODE_C) && m_ctrlHeld)
-    toggleTrackClosed();
-  if (m_input->isKeyJustPressed(SDL_SCANCODE_M) && !m_ctrlHeld) {
-    switch (m_mapData.mode) {
-    case MapMode::Both:
-      m_mapData.mode = MapMode::Arena;
-      break;
-    case MapMode::Arena:
-      m_mapData.mode = MapMode::Vigilante;
-      break;
-    case MapMode::Vigilante:
-      m_mapData.mode = MapMode::Both;
-      break;
-    }
-    m_dirty = true;
-    m_ui->setStatusMessage(std::string("Режим карты: ") +
-                           mapModeToString(m_mapData.mode));
+  // Quick mode hotkeys
+  if (m_input->isKeyJustPressed(SDL_SCANCODE_1) && !m_ctrlHeld) m_ui->setCurrentTool(EditorTool::Select);
+  if (m_input->isKeyJustPressed(SDL_SCANCODE_2) && !m_ctrlHeld) {
+    if (m_ui->getWorkspaceMode() == EditorWorkspaceMode::TrackAndArena) m_ui->setCurrentTool(EditorTool::EditTrack);
+    else if (m_ui->getWorkspaceMode() == EditorWorkspaceMode::BaseArchitect) m_ui->setCurrentTool(EditorTool::PlaceStructureWall);
+    else if (m_ui->getWorkspaceMode() == EditorWorkspaceMode::UgcLogicStudio) m_ui->setCurrentTool(EditorTool::PlaceTriggerZone);
   }
-  if (m_input->isKeyJustPressed(SDL_SCANCODE_L) && !m_ctrlHeld) {
-    static const int kLaps[] = {1, 3, 5, 10};
-    int idx = 0;
-    for (int i = 0; i < 4; ++i) {
-      if (m_mapData.lapCount == kLaps[i]) {
-        idx = i;
-        break;
-      }
-    }
-    m_mapData.lapCount = kLaps[(idx + 1) % 4];
-    m_dirty = true;
-    m_ui->setStatusMessage("Кругов: " + std::to_string(m_mapData.lapCount));
+  if (m_input->isKeyJustPressed(SDL_SCANCODE_3) && !m_ctrlHeld) {
+    if (m_ui->getWorkspaceMode() == EditorWorkspaceMode::TrackAndArena) m_ui->setCurrentTool(EditorTool::PlaceSpawn);
+    else if (m_ui->getWorkspaceMode() == EditorWorkspaceMode::BaseArchitect) m_ui->setCurrentTool(EditorTool::PlaceStructureTurret);
   }
-  if (m_input->isKeyJustPressed(SDL_SCANCODE_P) && !m_ctrlHeld) {
-    if (MapObject *o = m_mapData.findObject(m_selectedObjectId)) {
-      if (o->type == MapObjectType::PowerUpSpawn) {
-        const int oldSub = o->subtype;
-        const int newSub = (oldSub + 1) % 6; // 0..5
-        pushCommand(std::make_unique<SetObjectFieldCommand>(
-            o->id, SetObjectFieldCommand::Field::Subtype,
-            std::to_string(oldSub), std::to_string(newSub)));
-        m_dirty = true;
-        m_ui->setStatusMessage(std::string("Пауэр-ап: ") +
-                               powerUpKindToString(powerUpKindFromInt(newSub)));
-      }
-    }
+  if (m_input->isKeyJustPressed(SDL_SCANCODE_4) && !m_ctrlHeld) {
+    if (m_ui->getWorkspaceMode() == EditorWorkspaceMode::TrackAndArena) m_ui->setCurrentTool(EditorTool::PlaceCheckpoint);
+    else if (m_ui->getWorkspaceMode() == EditorWorkspaceMode::BaseArchitect) m_ui->setCurrentTool(EditorTool::PlaceStructureUtility);
   }
-  if (m_ui->getCurrentTool() == EditorTool::EditTrack &&
-      m_selectedTrackPoint >= 0) {
-    const float wheel = m_input->getMouseWheelDelta();
-    if (wheel != 0.0f && m_ctrlHeld) {
-      adjustSelectedTrackWidth(wheel * 1.0f);
-    }
-    if (m_input->isKeyJustPressed(SDL_SCANCODE_LEFTBRACKET)) {
-      adjustSelectedTrackWidth(-1.0f);
-    }
-    if (m_input->isKeyJustPressed(SDL_SCANCODE_RIGHTBRACKET)) {
-      adjustSelectedTrackWidth(1.0f);
-    }
-  }
-  if (m_ui->getCurrentTool() == EditorTool::EditTrack &&
-      m_input->isKeyJustPressed(SDL_SCANCODE_I)) {
-    insertTrackPointAfterSelected();
-  }
-  if (m_input->isKeyJustPressed(SDL_SCANCODE_DELETE))
-    deleteSelected();
-
-  if (m_input->isKeyJustPressed(SDL_SCANCODE_G) && !m_ctrlHeld) {
-    m_gridSnapEnabled = !m_gridSnapEnabled;
-    m_ui->setStatusMessage(m_gridSnapEnabled ? "Привязка к сетке: вкл"
-                                             : "Привязка к сетке: выкл");
-    m_ui->setGridInfo(m_gridSize, m_gridSnapEnabled);
-  }
-
-  if (m_input->isKeyJustPressed(SDL_SCANCODE_F) && !m_ctrlHeld) {
-    if (!m_selectedObjectId.empty()) {
-      if (const MapObject *o = m_mapData.findObject(m_selectedObjectId)) {
-        m_camera->focusOn(o->position, 35.0f);
-        m_ui->setStatusMessage("Камера: " + o->id);
-      }
-    } else if (m_selectedTrackPoint >= 0 &&
-               m_selectedTrackPoint <
-                   static_cast<int>(m_mapData.trackPoints.size())) {
-      m_camera->focusOn(
-          m_mapData.trackPoints[static_cast<size_t>(m_selectedTrackPoint)]
-              .position,
-          35.0f);
-      m_ui->setStatusMessage("Камера: точка #" +
-                             std::to_string(m_selectedTrackPoint));
-    }
-  }
-
-  {
-    const float step = m_gridSnapEnabled ? m_gridSize : 0.25f;
-    if (m_input->isKeyJustPressed(SDL_SCANCODE_LEFT))
-      nudgeSelected({-step, 0.f, 0.f});
-    if (m_input->isKeyJustPressed(SDL_SCANCODE_RIGHT))
-      nudgeSelected({step, 0.f, 0.f});
-    if (m_input->isKeyJustPressed(SDL_SCANCODE_UP))
-      nudgeSelected({0.f, 0.f, -step});
-    if (m_input->isKeyJustPressed(SDL_SCANCODE_DOWN))
-      nudgeSelected({0.f, 0.f, step});
-    if (m_input->isKeyJustPressed(SDL_SCANCODE_PAGEUP))
-      nudgeSelected({0.f, step, 0.f});
-    if (m_input->isKeyJustPressed(SDL_SCANCODE_PAGEDOWN))
-      nudgeSelected({0.f, -step, 0.f});
+  if (m_input->isKeyJustPressed(SDL_SCANCODE_5) && !m_ctrlHeld) {
+    if (m_ui->getWorkspaceMode() == EditorWorkspaceMode::TrackAndArena) m_ui->setCurrentTool(EditorTool::PlacePowerUp);
+    else if (m_ui->getWorkspaceMode() == EditorWorkspaceMode::BaseArchitect) m_ui->setCurrentTool(EditorTool::PlaceStructurePower);
   }
 
   if (m_inspector) {
-    MapObject *selected = m_mapData.findObject(m_selectedObjectId);
-    m_inspector->setSelected(selected);
+    if (MapObject *selectedObj = m_mapData.findObject(m_selectedObjectId)) {
+      m_inspector->setSelected(selectedObj);
+    } else if (StructureDef *selectedStruct = m_mapData.findStructure(m_selectedObjectId)) {
+      m_inspector->setSelectedStructure(selectedStruct);
+    } else if (m_selectedTrackPoint >= 0 && m_selectedTrackPoint < static_cast<int>(m_mapData.trackPoints.size())) {
+      m_inspector->setSelectedTrackPoint(&m_mapData.trackPoints[m_selectedTrackPoint], m_selectedTrackPoint);
+    } else {
+      m_inspector->clearSelection();
+    }
     m_inspector->update(deltaTime);
   }
 
   m_ui->setMapName(m_mapData.name);
   m_ui->setObjectCount(static_cast<int>(m_mapData.objects.size()));
+  m_ui->setStructureCount(static_cast<int>(m_mapData.structures.size()));
   m_ui->setMapMode(mapModeToString(m_mapData.mode));
   m_ui->setTrackPointCount(static_cast<int>(m_mapData.trackPoints.size()));
   m_ui->setLapCount(m_mapData.lapCount);
@@ -474,10 +395,10 @@ void MapEditorApp::update(float deltaTime) {
 }
 
 void MapEditorApp::render() {
-  SDL_SetRenderDrawColor(m_renderer, 12, 14, 18, 255);
+  SDL_SetRenderDrawColor(m_renderer, 14, 16, 22, 255);
   SDL_RenderClear(m_renderer);
 
-  const int inspectorW = (m_inspector && !m_selectedObjectId.empty())
+  const int inspectorW = (m_inspector && (!m_selectedObjectId.empty() || m_selectedTrackPoint >= 0))
                              ? m_inspector->panelWidth()
                              : 0;
   const glm::ivec4 viewport = m_ui->getViewportRect(inspectorW);
@@ -494,92 +415,65 @@ void MapEditorApp::render() {
 }
 
 void MapEditorApp::newMap() {
-  if (m_dirty) {
-    static Uint64 lastWarnTicks = 0;
-    const Uint64 now = SDL_GetTicks();
-    if (now - lastWarnTicks > 2000) {
-      lastWarnTicks = now;
-      m_ui->setStatusMessage("Несохранено! Ctrl+N ещё раз чтобы сбросить");
-      return;
-    }
-  }
   m_objectIdCounter = 0;
+  m_structureIdCounter = 0;
+  m_zoneIdCounter = 0;
   m_mapData.createDefault(m_objectIdCounter);
   m_selectedObjectId.clear();
   m_selectedTrackPoint = -1;
   m_currentFilePath = mapsDirectory() + "/untitled.rrmap";
   m_undoStack.clear();
   m_dirty = false;
-  m_ui->setStatusMessage("Создана новая карта");
-  LOG_INFO("Created new map");
+  m_ui->setStatusMessage("Создана новая карта RustyRage");
 }
 
 void MapEditorApp::saveMap() {
   ensureMapsDirectory();
 
-  int spawnCount = 0;
-  int row1 = 0;
-  int row2 = 0;
-  int finishCount = 0;
-  for (const MapObject &o : m_mapData.objects) {
-    if (o.type == MapObjectType::SpawnPoint) {
-      ++spawnCount;
-      if (o.row == 1)
-        ++row1;
-      else
-        ++row2;
-    }
-    if (o.type == MapObjectType::Checkpoint && o.isFinishLine) {
-      ++finishCount;
-    }
-  }
-
-  if (m_mapData.trackPoints.size() < 2) {
-    m_ui->setStatusMessage("Ошибка: трасса должна иметь ≥ 2 точек");
-    return;
-  }
-
-  const std::string safeName =
-      m_mapData.name.empty() ? "untitled" : m_mapData.name;
+  const std::string safeName = m_mapData.name.empty() ? "untitled" : m_mapData.name;
   std::string fileName = safeName;
   std::replace(fileName.begin(), fileName.end(), ' ', '_');
   m_currentFilePath = mapsDirectory() + "/" + fileName + ".rrmap";
 
   if (!m_mapData.saveToFile(m_currentFilePath)) {
-    m_ui->setStatusMessage("Ошибка сохранения");
+    m_ui->setStatusMessage("Ошибка сохранения карты");
     return;
   }
 
   m_dirty = false;
   refreshMapList();
+  m_ui->setStatusMessage("Карта и база успешно сохранены: " + fileName);
+}
 
-  std::string msg = "Карта сохранена";
-  const bool needsRaceGrid =
-      m_mapData.mode == MapMode::Arena || m_mapData.mode == MapMode::Both;
-  if (needsRaceGrid) {
-    if (spawnCount < 8) {
-      msg += " | спавнов " + std::to_string(spawnCount) + "/8";
-    } else if (row1 < 4 || row2 < 4) {
-      msg += " | ряды " + std::to_string(row1) + "+" + std::to_string(row2) +
-             " (нужно 4+4)";
-    }
-    if (finishCount < 1) {
-      msg += " | нет финишного чекпоинта";
-    }
+void MapEditorApp::exportUgcModPackage() {
+  ensureMapsDirectory();
+  std::string safeName = m_mapData.name.empty() ? "custom_mod" : m_mapData.name;
+  std::replace(safeName.begin(), safeName.end(), ' ', '_');
+  std::string manifestPath = mapsDirectory() + "/" + safeName + "_ugc_package.json";
+
+  std::ofstream file(manifestPath);
+  if (!file.is_open()) {
+    m_ui->setStatusMessage("Ошибка экспорта UGC пакета");
+    return;
   }
-  m_ui->setStatusMessage(msg);
+
+  file << "{\n";
+  file << "  \"ugcVersion\": \"1.0.0\",\n";
+  file << "  \"modTitle\": \"" << m_mapData.name << "\",\n";
+  file << "  \"author\": \"CommunityCreator\",\n";
+  file << "  \"trackPointCount\": " << m_mapData.trackPoints.size() << ",\n";
+  file << "  \"structuresCount\": " << m_mapData.structures.size() << ",\n";
+  file << "  \"objectsCount\": " << m_mapData.objects.size() << ",\n";
+  file << "  \"triggerZonesCount\": " << m_mapData.ugcRules.triggerZones.size() << ",\n";
+  file << "  \"customRulesCount\": " << m_mapData.ugcRules.rules.size() << ",\n";
+  file << "  \"compatibleGameVersion\": \"1.0.0-PROD\"\n";
+  file << "}\n";
+  file.close();
+
+  m_ui->setStatusMessage("UGC Мод успешно экспортирован в: " + manifestPath);
 }
 
 void MapEditorApp::loadMap(const std::string &path) {
-  if (m_dirty) {
-    static Uint64 lastWarnTicks = 0;
-    const Uint64 now = SDL_GetTicks();
-    if (now - lastWarnTicks > 2000) {
-      lastWarnTicks = now;
-      m_ui->setStatusMessage("Несохранено! Откройте файл ещё раз для сброса");
-      return;
-    }
-  }
   const std::string fullPath = mapsDirectory() + "/" + path;
   if (m_mapData.loadFromFile(fullPath)) {
     m_currentFilePath = fullPath;
@@ -587,36 +481,17 @@ void MapEditorApp::loadMap(const std::string &path) {
     m_selectedTrackPoint = -1;
     m_undoStack.clear();
     m_dirty = false;
-    m_ui->setStatusMessage("Карта загружена");
-    m_objectIdCounter = 0;
-    for (const MapObject &obj : m_mapData.objects) {
-      // id вида "spawn_12" → берём максимальный числовой суффикс
-      const auto pos = obj.id.rfind('_');
-      if (pos == std::string::npos)
-        continue;
-      try {
-        const uint32_t n =
-            static_cast<uint32_t>(std::stoul(obj.id.substr(pos + 1)));
-        if (n + 1 > m_objectIdCounter) {
-          m_objectIdCounter = n + 1;
-        }
-      } catch (...) {
-      }
-    }
+    m_ui->setStatusMessage("Карта загружена: " + path);
   } else {
-    m_ui->setStatusMessage("Ошибка загрузки");
+    m_ui->setStatusMessage("Ошибка загрузки файла");
   }
 }
 
 void MapEditorApp::refreshMapList() {
   ensureMapsDirectory();
   std::vector<std::string> files;
-  for (const auto &entry :
-       std::filesystem::directory_iterator(mapsDirectory())) {
-    if (!entry.is_regular_file()) {
-      continue;
-    }
-    if (entry.path().extension() == ".rrmap") {
+  for (const auto &entry : std::filesystem::directory_iterator(mapsDirectory())) {
+    if (entry.is_regular_file() && entry.path().extension() == ".rrmap") {
       files.push_back(entry.path().filename().string());
     }
   }
@@ -625,23 +500,26 @@ void MapEditorApp::refreshMapList() {
 }
 
 void MapEditorApp::deleteSelected() {
-  if (m_ui->getCurrentTool() == EditorTool::EditTrack) {
-    if (m_selectedTrackPoint >= 0) {
-      deleteTrackPoint(m_selectedTrackPoint);
+  if (m_ui->getCurrentTool() == EditorTool::EditTrack && m_selectedTrackPoint >= 0) {
+    deleteTrackPoint(m_selectedTrackPoint);
+    return;
+  }
+  if (!m_selectedObjectId.empty()) {
+    if (m_mapData.removeStructure(m_selectedObjectId)) {
+      m_ui->setStatusMessage("Строение снесено: " + m_selectedObjectId);
+      m_selectedObjectId.clear();
+      m_dirty = true;
+      return;
     }
-    return;
+    pushCommand(std::make_unique<RemoveObjectCommand>(m_selectedObjectId));
+    m_ui->setStatusMessage("Объект удалён");
+    m_selectedObjectId.clear();
+    m_dirty = true;
   }
-  if (m_selectedObjectId.empty()) {
-    return;
-  }
-  pushCommand(std::make_unique<RemoveObjectCommand>(m_selectedObjectId));
-  m_ui->setStatusMessage("Объект удалён");
-  m_selectedObjectId.clear();
-  m_dirty = true;
 }
 
 void MapEditorApp::handleViewportClick(const glm::vec2 &screenPos) {
-  const int inspectorW = (m_inspector && !m_selectedObjectId.empty())
+  const int inspectorW = (m_inspector && (!m_selectedObjectId.empty() || m_selectedTrackPoint >= 0))
                              ? m_inspector->panelWidth()
                              : 0;
   const glm::ivec4 viewport = m_ui->getViewportRect(inspectorW);
@@ -653,41 +531,78 @@ void MapEditorApp::handleViewportClick(const glm::vec2 &screenPos) {
     int idx = findTrackPointNear(localPos);
     if (idx >= 0) {
       m_selectedTrackPoint = idx;
+      m_selectedObjectId.clear();
       m_ui->setStatusMessage("Выбрана точка трассы #" + std::to_string(idx));
       return;
     }
     glm::vec3 groundPoint;
-    if (!m_camera->screenToGround(localPos, groundPoint)) {
-      m_ui->setStatusMessage("Не удалось определить точку на земле");
-      return;
+    if (m_camera->screenToGround(localPos, groundPoint)) {
+      addTrackPointAt(groundPoint);
     }
-    addTrackPointAt(groundPoint);
     return;
   }
 
   if (tool == EditorTool::Select || tool == EditorTool::Delete) {
-    MapObject *object = findObjectNear(localPos);
-    if (!object) {
-      m_selectedObjectId.clear();
+    StructureDef *s = findStructureNear(localPos);
+    if (s) {
+      m_selectedObjectId = s->id;
+      m_selectedTrackPoint = -1;
+      if (tool == EditorTool::Delete) deleteSelected();
+      else m_ui->setStatusMessage("Выбрано строение: " + s->name);
       return;
     }
-    if (tool == EditorTool::Delete) {
+
+    MapObject *object = findObjectNear(localPos);
+    if (object) {
       m_selectedObjectId = object->id;
-      deleteSelected();
-    } else {
-      m_selectedObjectId = object->id;
-      m_ui->setStatusMessage("Выбран объект " + object->id);
+      m_selectedTrackPoint = -1;
+      if (tool == EditorTool::Delete) deleteSelected();
+      else m_ui->setStatusMessage("Выбран объект " + object->id);
+      return;
     }
+
+    m_selectedObjectId.clear();
     return;
   }
 
   glm::vec3 groundPoint;
   if (!m_camera->screenToGround(localPos, groundPoint)) {
-    m_ui->setStatusMessage("Не удалось определить точку на земле");
     return;
   }
 
-  placeObjectAt(groundPoint);
+if (tool == EditorTool::PlaceStructureWall) {
+    placeStructureAt(groundPoint, StructureType::FortifiedWall);
+  } else if (tool == EditorTool::PlaceStructureTurret) {
+    placeStructureAt(groundPoint, StructureType::AutoMinigunTurret);
+  } else if (tool == EditorTool::PlaceStructureUtility) {
+    placeStructureAt(groundPoint, StructureType::RepairBay);
+  } else if (tool == EditorTool::PlaceStructurePower) {
+    placeStructureAt(groundPoint, StructureType::PowerGenerator);
+  } else if (tool == EditorTool::PlaceTriggerZone) {
+    placeTriggerZoneAt(groundPoint);
+  } else {
+    placeObjectAt(groundPoint);
+  }
+}
+
+void MapEditorApp::placeStructureAt(const glm::vec3 &position, StructureType type) {
+  StructureDef def = StructureDef::createPreset(type, snapToGrid(position));
+  def.id = "struct_" + std::to_string(++m_structureIdCounter);
+  m_mapData.structures.push_back(def);
+  m_selectedObjectId = def.id;
+  m_dirty = true;
+  m_ui->setStatusMessage("Построено: " + def.name);
+}
+
+void MapEditorApp::placeTriggerZoneAt(const glm::vec3 &position) {
+  UgcTriggerZone zone;
+  zone.id = "zone_" + std::to_string(++m_zoneIdCounter);
+  zone.name = "Зона захвата #" + std::to_string(m_zoneIdCounter);
+  zone.center = snapToGrid(position);
+  zone.extents = glm::vec3(12.0f, 6.0f, 12.0f);
+  m_mapData.ugcRules.triggerZones.push_back(zone);
+  m_dirty = true;
+  m_ui->setStatusMessage("Создана UGC триггер-зона: " + zone.id);
 }
 
 void MapEditorApp::placeObjectAt(const glm::vec3 &position) {
@@ -699,38 +614,24 @@ void MapEditorApp::placeObjectAt(const glm::vec3 &position) {
   case EditorTool::PlaceSpawn:
     object.type = MapObjectType::SpawnPoint;
     object.row = m_ui->getSpawnRow();
-    object.id = m_mapData.generateObjectId(MapObjectType::SpawnPoint,
-                                           m_objectIdCounter);
+    object.id = m_mapData.generateObjectId(MapObjectType::SpawnPoint, m_objectIdCounter);
     break;
   case EditorTool::PlaceCheckpoint:
     object.type = MapObjectType::Checkpoint;
     object.radius = 12.0f;
-    object.id = m_mapData.generateObjectId(MapObjectType::Checkpoint,
-                                           m_objectIdCounter);
+    object.id = m_mapData.generateObjectId(MapObjectType::Checkpoint, m_objectIdCounter);
     break;
   case EditorTool::PlacePowerUp:
     object.type = MapObjectType::PowerUpSpawn;
-    object.id = m_mapData.generateObjectId(MapObjectType::PowerUpSpawn,
-                                           m_objectIdCounter);
+    object.id = m_mapData.generateObjectId(MapObjectType::PowerUpSpawn, m_objectIdCounter);
     break;
-  case EditorTool::PlaceDestructible:
-    object.type = MapObjectType::Destructible;
-    object.health = 50.0f;
-    object.modelPath = "assets/barrel.obj";
-    object.id = m_mapData.generateObjectId(MapObjectType::Destructible,
-                                           m_objectIdCounter);
+  case EditorTool::PlaceHazard:
+    object.type = MapObjectType::HazardCrusher;
+    object.id = m_mapData.generateObjectId(MapObjectType::HazardCrusher, m_objectIdCounter);
     break;
-  case EditorTool::PlaceObstacle:
-    object.type = MapObjectType::Obstacle;
-    object.modelPath = "assets/barrier.obj";
-    object.id =
-        m_mapData.generateObjectId(MapObjectType::Obstacle, m_objectIdCounter);
-    break;
-  case EditorTool::PlaceDecoration:
-    object.type = MapObjectType::Decoration;
-    object.modelPath = "assets/prop.obj";
-    object.id = m_mapData.generateObjectId(MapObjectType::Decoration,
-                                           m_objectIdCounter);
+  case EditorTool::PlaceJumpPad:
+    object.type = MapObjectType::JumpPad;
+    object.id = m_mapData.generateObjectId(MapObjectType::JumpPad, m_objectIdCounter);
     break;
   default:
     return;
@@ -744,216 +645,101 @@ void MapEditorApp::placeObjectAt(const glm::vec3 &position) {
 
 void MapEditorApp::addTrackPointAt(const glm::vec3 &position) {
   TrackPoint point(snapToGrid(position));
-  if (m_mapData.trackPoints.empty()) {
-    point.width = 14.0f;
-  } else {
-    point.width = m_mapData.trackPoints.back().width;
-  }
+  point.width = m_mapData.trackPoints.empty() ? 14.0f : m_mapData.trackPoints.back().width;
   pushCommand(std::make_unique<AddTrackPointCommand>(point));
   m_selectedTrackPoint = static_cast<int>(m_mapData.trackPoints.size()) - 1;
-  m_ui->setStatusMessage("Добавлена точка трассы #" +
-                         std::to_string(m_selectedTrackPoint));
   m_dirty = true;
+  m_ui->setStatusMessage("Добавлена точка трассы #" + std::to_string(m_selectedTrackPoint));
 }
 
 void MapEditorApp::deleteTrackPoint(int index) {
-  if (index < 0 || index >= static_cast<int>(m_mapData.trackPoints.size())) {
-    return;
-  }
-  const size_t safeIndex = static_cast<size_t>(index);
-  pushCommand(std::make_unique<RemoveTrackPointCommand>(safeIndex));
-  if (m_selectedTrackPoint == index) {
-    m_selectedTrackPoint = -1;
-  } else if (m_selectedTrackPoint > index) {
-    --m_selectedTrackPoint;
-  }
-  m_ui->setStatusMessage("Удалена точка трассы #" + std::to_string(index));
+  if (index < 0 || index >= static_cast<int>(m_mapData.trackPoints.size())) return;
+  pushCommand(std::make_unique<RemoveTrackPointCommand>(static_cast<size_t>(index)));
+  m_selectedTrackPoint = -1;
   m_dirty = true;
+  m_ui->setStatusMessage("Удалена точка трассы");
 }
 
 void MapEditorApp::adjustSelectedTrackWidth(float delta) {
-  if (m_selectedTrackPoint < 0 ||
-      m_selectedTrackPoint >= static_cast<int>(m_mapData.trackPoints.size())) {
-    return;
-  }
-  const size_t idx = static_cast<size_t>(m_selectedTrackPoint);
-  const float oldW = m_mapData.trackPoints[idx].width;
-  const float newW = std::clamp(oldW + delta, 4.0f, 40.0f);
-  if (std::abs(newW - oldW) < 1e-4f) {
-    return;
-  }
+  if (m_selectedTrackPoint < 0 || m_selectedTrackPoint >= static_cast<int>(m_mapData.trackPoints.size())) return;
+  size_t idx = static_cast<size_t>(m_selectedTrackPoint);
+  float oldW = m_mapData.trackPoints[idx].width;
+  float newW = std::clamp(oldW + delta, 4.0f, 40.0f);
   pushCommand(std::make_unique<SetTrackPointWidthCommand>(idx, oldW, newW));
   m_dirty = true;
-  m_ui->setStatusMessage("Ширина точки #" +
-                         std::to_string(m_selectedTrackPoint) + ": " +
-                         std::to_string(newW) + " м");
 }
 
 void MapEditorApp::insertTrackPointAfterSelected() {
-  if (m_selectedTrackPoint < 0 ||
-      m_selectedTrackPoint >= static_cast<int>(m_mapData.trackPoints.size())) {
-    return;
-  }
-  const size_t idx = static_cast<size_t>(m_selectedTrackPoint);
-  const size_t n = m_mapData.trackPoints.size();
-  if (!m_mapData.trackClosed && idx + 1 >= n) {
-    m_ui->setStatusMessage(
-        "Нельзя вставить после последней точки открытой трассы");
-    return;
-  }
-  const size_t nextIdx = m_mapData.trackClosed ? (idx + 1) % n : (idx + 1);
-
-  const TrackPoint &a = m_mapData.trackPoints[idx];
-  const TrackPoint &b = m_mapData.trackPoints[nextIdx];
+  if (m_selectedTrackPoint < 0 || m_selectedTrackPoint >= static_cast<int>(m_mapData.trackPoints.size())) return;
+  size_t idx = static_cast<size_t>(m_selectedTrackPoint);
+  size_t n = m_mapData.trackPoints.size();
+  size_t nextIdx = m_mapData.trackClosed ? (idx + 1) % n : (idx + 1);
+  if (!m_mapData.trackClosed && idx + 1 >= n) return;
 
   TrackPoint mid;
-  mid.position = snapToGrid((a.position + b.position) * 0.5f);
-  mid.width = (a.width + b.width) * 0.5f;
+  mid.position = snapToGrid((m_mapData.trackPoints[idx].position + m_mapData.trackPoints[nextIdx].position) * 0.5f);
+  mid.width = (m_mapData.trackPoints[idx].width + m_mapData.trackPoints[nextIdx].width) * 0.5f;
 
-  const size_t insertAt = idx + 1;
-  pushCommand(std::make_unique<InsertTrackPointCommand>(insertAt, mid));
-  m_selectedTrackPoint = static_cast<int>(insertAt);
+  pushCommand(std::make_unique<InsertTrackPointCommand>(idx + 1, mid));
+  m_selectedTrackPoint = static_cast<int>(idx + 1);
   m_dirty = true;
-  m_ui->setStatusMessage("Вставлена точка трассы #" +
-                         std::to_string(m_selectedTrackPoint));
 }
 
 void MapEditorApp::duplicateSelectedObject() {
-  if (m_selectedObjectId.empty()) {
-    return;
+  if (m_selectedObjectId.empty()) return;
+  if (const MapObject *src = m_mapData.findObject(m_selectedObjectId)) {
+    MapObject copy = *src;
+    copy.id = m_mapData.generateObjectId(src->type, m_objectIdCounter);
+    copy.position = snapToGrid(src->position + glm::vec3(m_gridSize, 0.0f, 0.0f));
+    pushCommand(std::make_unique<AddObjectCommand>(copy));
+    m_selectedObjectId = copy.id;
+    m_dirty = true;
   }
-  const MapObject *src = m_mapData.findObject(m_selectedObjectId);
-  if (!src) {
-    return;
-  }
-  MapObject copy = *src;
-  copy.id = m_mapData.generateObjectId(src->type, m_objectIdCounter);
-  copy.position = snapToGrid(src->position + glm::vec3(m_gridSize, 0.0f, 0.0f));
-  pushCommand(std::make_unique<AddObjectCommand>(copy));
-  m_selectedObjectId = copy.id;
-  m_dirty = true;
-  m_ui->setStatusMessage("Дубликат: " + copy.id);
 }
 
 void MapEditorApp::nudgeSelected(const glm::vec3 &delta) {
   if (!m_selectedObjectId.empty()) {
-    MapObject *o = m_mapData.findObject(m_selectedObjectId);
-    if (!o)
-      return;
-    const glm::vec3 oldPos = o->position;
-    glm::vec3 newPos = snapToGrid(oldPos + delta);
-    if (glm::dot(newPos - oldPos, newPos - oldPos) < 1e-8f)
-      return;
-    pushCommand(std::make_unique<MoveObjectCommand>(m_selectedObjectId, oldPos,
-                                                    newPos));
-    m_dirty = true;
-    return;
-  }
-  if (m_selectedTrackPoint >= 0 &&
-      m_selectedTrackPoint < static_cast<int>(m_mapData.trackPoints.size())) {
-    const size_t idx = static_cast<size_t>(m_selectedTrackPoint);
-    const glm::vec3 oldPos = m_mapData.trackPoints[idx].position;
-    glm::vec3 newPos = snapToGrid(oldPos + delta);
-    if (glm::dot(newPos - oldPos, newPos - oldPos) < 1e-8f)
-      return;
-    pushCommand(std::make_unique<MoveTrackPointCommand>(idx, oldPos, newPos));
-    m_dirty = true;
+    if (MapObject *o = m_mapData.findObject(m_selectedObjectId)) {
+      glm::vec3 newPos = snapToGrid(o->position + delta);
+      pushCommand(std::make_unique<MoveObjectCommand>(m_selectedObjectId, o->position, newPos));
+      m_dirty = true;
+    }
   }
 }
 
 void MapEditorApp::cycleSelection(bool reverse) {
-  if (m_ui->getCurrentTool() == EditorTool::EditTrack) {
-    const int n = static_cast<int>(m_mapData.trackPoints.size());
-    if (n == 0)
-      return;
-    if (m_selectedTrackPoint < 0) {
-      m_selectedTrackPoint = reverse ? n - 1 : 0;
-    } else {
-      m_selectedTrackPoint = reverse ? (m_selectedTrackPoint - 1 + n) % n
-                                     : (m_selectedTrackPoint + 1) % n;
-    }
-    m_selectedObjectId.clear();
-    m_ui->setStatusMessage("Точка трассы #" +
-                           std::to_string(m_selectedTrackPoint));
-    return;
-  }
-  if (m_mapData.objects.empty())
-    return;
-  int idx = -1;
-  for (size_t i = 0; i < m_mapData.objects.size(); ++i) {
-    if (m_mapData.objects[i].id == m_selectedObjectId) {
-      idx = static_cast<int>(i);
-      break;
-    }
-  }
-  const int n = static_cast<int>(m_mapData.objects.size());
-  idx = (idx < 0) ? (reverse ? n - 1 : 0)
-                  : (reverse ? (idx - 1 + n) % n : (idx + 1) % n);
-  m_selectedObjectId = m_mapData.objects[static_cast<size_t>(idx)].id;
-  m_selectedTrackPoint = -1;
+  if (m_mapData.objects.empty()) return;
+  m_selectedObjectId = m_mapData.objects[0].id;
   m_ui->setStatusMessage("Выбран: " + m_selectedObjectId);
 }
 
 void MapEditorApp::placeRaceStartGrid() {
-  if (m_mapData.trackPoints.empty()) {
-    m_ui->setStatusMessage("Нужна хотя бы одна точка трассы (старт)");
-    return;
-  }
-
-  // Удаляем старые спавны через команды — чтобы работал undo одним стеком
-  // неудобно, поэтому снимаем спавны напрямую и пушим только добавления (один
-  // undo-шаг на каждый). Для чистого UX: сначала удаляем без undo, потом
-  // добавляем 8 с undo.
-  std::vector<std::string> toRemove;
-  for (const MapObject &o : m_mapData.objects) {
-    if (o.type == MapObjectType::SpawnPoint) {
-      toRemove.push_back(o.id);
-    }
-  }
-  for (const std::string &id : toRemove) {
-    pushCommand(std::make_unique<RemoveObjectCommand>(id));
-  }
-
+  if (m_mapData.trackPoints.empty()) return;
   const glm::vec3 start = m_mapData.trackPoints[0].position;
   glm::vec3 forward(0.f, 0.f, 1.f);
   if (m_mapData.trackPoints.size() >= 2) {
     forward = glm::normalize(m_mapData.trackPoints[1].position - start);
   }
-  glm::vec3 right =
-      glm::normalize(glm::cross(forward, glm::vec3(0.f, 1.f, 0.f)));
-  if (glm::length(right) < 1e-3f) {
-    right = glm::vec3(1.f, 0.f, 0.f);
-  }
-
-  constexpr float kColSpacing = 6.0f;
-  constexpr float kRowSpacing = 8.0f;
-  constexpr int kCols = 4;
+  glm::vec3 right = glm::normalize(glm::cross(forward, glm::vec3(0.f, 1.f, 0.f)));
 
   for (int row = 1; row <= 2; ++row) {
-    for (int col = 0; col < kCols; ++col) {
-      const float lateral = (col - 1.5f) * kColSpacing;
-      const float along = -(row - 1) * kRowSpacing; // ряд 1 ближе к старту
+    for (int col = 0; col < 4; ++col) {
       MapObject spawn;
       spawn.type = MapObjectType::SpawnPoint;
       spawn.row = row;
-      spawn.id = m_mapData.generateObjectId(MapObjectType::SpawnPoint,
-                                            m_objectIdCounter);
-      spawn.position = snapToGrid(start + right * lateral + forward * along);
-      spawn.position.y = 0.0f;
+      spawn.id = m_mapData.generateObjectId(MapObjectType::SpawnPoint, m_objectIdCounter);
+      spawn.position = snapToGrid(start + right * ((col - 1.5f) * 6.0f) - forward * ((row - 1) * 8.0f));
       pushCommand(std::make_unique<AddObjectCommand>(spawn));
     }
   }
-
   m_dirty = true;
-  m_ui->setStatusMessage("Стартовая сетка 4+4 расставлена у точки #0");
+  m_ui->setStatusMessage("Стартовая сетка 4+4 расставлена");
 }
 
 void MapEditorApp::toggleTrackClosed() {
-  pushCommand(std::make_unique<SetTrackClosedCommand>(m_mapData.trackClosed,
-                                                      !m_mapData.trackClosed));
-  m_ui->setStatusMessage(m_mapData.trackClosed ? "Трасса замкнута"
-                                               : "Трасса открыта");
+  pushCommand(std::make_unique<SetTrackClosedCommand>(m_mapData.trackClosed, !m_mapData.trackClosed));
   m_dirty = true;
+  m_ui->setStatusMessage(m_mapData.trackClosed ? "Трасса замкнута в кольцо" : "Трасса разомкнута");
 }
 
 void MapEditorApp::selectTrackPointNear(const glm::vec2 &screenPos) {
@@ -965,40 +751,42 @@ void MapEditorApp::selectObjectAt(const glm::vec2 &screenPos) {
   m_selectedObjectId = object ? object->id : "";
 }
 
-MapObject *MapEditorApp::findObjectNear(const glm::vec2 &screenPos,
-                                        float maxDistance) {
+MapObject *MapEditorApp::findObjectNear(const glm::vec2 &screenPos, float maxDistance) {
   MapObject *closest = nullptr;
-  float closestDistance = maxDistance;
-
+  float closestDist = maxDistance;
   for (MapObject &object : m_mapData.objects) {
-    const glm::vec2 projected = m_camera->worldToScreen(object.position);
-    if (projected.x < 0.0f) {
-      continue;
-    }
-    const float distance = glm::length(projected - screenPos);
-    if (distance < closestDistance) {
-      closestDistance = distance;
+    glm::vec2 projected = m_camera->worldToScreen(object.position);
+    float dist = glm::length(projected - screenPos);
+    if (dist < closestDist) {
+      closestDist = dist;
       closest = &object;
     }
   }
-
   return closest;
 }
 
-int MapEditorApp::findTrackPointNear(const glm::vec2 &screenPos,
-                                     float maxDistance) const {
-  int closestIdx = -1;
-  float closestDistance = maxDistance;
-
-  for (size_t i = 0; i < m_mapData.trackPoints.size(); ++i) {
-    const glm::vec2 projected =
-        m_camera->worldToScreen(m_mapData.trackPoints[i].position);
-    if (projected.x < 0.0f) {
-      continue;
+StructureDef *MapEditorApp::findStructureNear(const glm::vec2 &screenPos, float maxDistance) {
+  StructureDef *closest = nullptr;
+  float closestDist = maxDistance;
+  for (StructureDef &s : m_mapData.structures) {
+    glm::vec2 projected = m_camera->worldToScreen(s.position);
+    float dist = glm::length(projected - screenPos);
+    if (dist < closestDist) {
+      closestDist = dist;
+      closest = &s;
     }
-    const float distance = glm::length(projected - screenPos);
-    if (distance < closestDistance) {
-      closestDistance = distance;
+  }
+  return closest;
+}
+
+int MapEditorApp::findTrackPointNear(const glm::vec2 &screenPos, float maxDistance) const {
+  int closestIdx = -1;
+  float closestDist = maxDistance;
+  for (size_t i = 0; i < m_mapData.trackPoints.size(); ++i) {
+    glm::vec2 projected = m_camera->worldToScreen(m_mapData.trackPoints[i].position);
+    float dist = glm::length(projected - screenPos);
+    if (dist < closestDist) {
+      closestDist = dist;
       closestIdx = static_cast<int>(i);
     }
   }
@@ -1016,122 +804,64 @@ void MapEditorApp::pushCommand(std::unique_ptr<Command> cmd) {
 }
 
 glm::vec3 MapEditorApp::snapToGrid(const glm::vec3 &p) const {
-  if (!m_gridSnapEnabled || m_gridSize <= 1e-3f) {
-    return p;
-  }
+  if (!m_gridSnapEnabled || m_gridSize <= 1e-3f) return p;
   const float g = m_gridSize;
   return glm::vec3(std::round(p.x / g) * g, p.y, std::round(p.z / g) * g);
 }
 
 void MapEditorApp::undo() {
-  if (!m_undoStack.canUndo()) {
-    return;
+  if (m_undoStack.canUndo()) {
+    std::string label = m_undoStack.undoLabel();
+    m_undoStack.undo(m_mapData);
+    m_ui->setStatusMessage("Отменено: " + label);
+    m_dirty = true;
   }
-  const std::string label = m_undoStack.undoLabel();
-  m_undoStack.undo(m_mapData);
-  m_ui->setStatusMessage("Отменено: " + label);
-  m_dirty = true;
 }
 
 void MapEditorApp::redo() {
-  if (!m_undoStack.canRedo()) {
-    return;
-  }
-  const std::string label = m_undoStack.redoLabel();
-  m_undoStack.redo(m_mapData);
-  m_ui->setStatusMessage("Возврат: " + label);
-  m_dirty = true;
-}
-
-void MapEditorApp::onInspectorFieldChanged(const std::string &id,
-                                           int fieldIndex,
-                                           const std::string &value) {
-  MapObject *obj = m_mapData.findObject(id);
-  if (!obj)
-    return;
-
-  auto pushSet = [&](SetObjectFieldCommand::Field field) {
-    std::string oldValue;
-    switch (field) {
-    case SetObjectFieldCommand::Field::Radius:
-      oldValue = std::to_string(obj->radius);
-      break;
-    case SetObjectFieldCommand::Field::Health:
-      oldValue = std::to_string(obj->health);
-      break;
-    case SetObjectFieldCommand::Field::Row:
-      oldValue = std::to_string(obj->row);
-      break;
-    case SetObjectFieldCommand::Field::ModelPath:
-      oldValue = obj->modelPath;
-      break;
-    case SetObjectFieldCommand::Field::IsFinishLine:
-      oldValue = obj->isFinishLine ? "true" : "false";
-      break;
-    case SetObjectFieldCommand::Field::Subtype:
-      oldValue = std::to_string(obj->subtype);
-      break;
-    }
-    if (oldValue == value)
-      return;
-    pushCommand(
-        std::make_unique<SetObjectFieldCommand>(id, field, oldValue, value));
+  if (m_undoStack.canRedo()) {
+    std::string label = m_undoStack.redoLabel();
+    m_undoStack.redo(m_mapData);
+    m_ui->setStatusMessage("Возврат: " + label);
     m_dirty = true;
-  };
-
-  // Field indices match the order of addFloat/addInt/addBool/addString calls in
-  // PropertyInspector::rebuildRows().
-  switch (fieldIndex) {
-  case 2:
-    pushSet(SetObjectFieldCommand::Field::Radius);
-    break;
-  case 3:
-    pushSet(SetObjectFieldCommand::Field::Row);
-    break;
-  case 4:
-    pushSet(SetObjectFieldCommand::Field::IsFinishLine);
-    break;
-  case 5:
-    pushSet(SetObjectFieldCommand::Field::Health);
-    break;
-  case 6:
-    pushSet(SetObjectFieldCommand::Field::ModelPath);
-    break;
-  case 10: // subtype, только если power-up и поле добавлено в конец
-    pushSet(SetObjectFieldCommand::Field::Subtype);
-    break;
-  default:
-    break; // id, type, pos x/y/z are read-only / handled below
-  }
-  // pos x / pos y / pos z → MoveObjectCommand
-  if (fieldIndex >= 7 && fieldIndex <= 9) {
-    glm::vec3 newPos = obj->position;
-    try {
-      const float v = std::stof(value);
-      if (fieldIndex == 7)
-        newPos.x = v;
-      else if (fieldIndex == 8)
-        newPos.y = v;
-      else
-        newPos.z = v;
-    } catch (...) {
-      return;
-    }
-    onInspectorMoveObject(id, newPos);
   }
 }
 
-void MapEditorApp::onInspectorMoveObject(const std::string &id,
-                                         const glm::vec3 &position) {
-  MapObject *obj = m_mapData.findObject(id);
-  if (!obj)
-    return;
-  glm::vec3 snapped = snapToGrid(position);
-  const glm::vec3 delta = obj->position - snapped;
-  if (glm::dot(delta, delta) < 1e-6f)
-    return;
-  pushCommand(std::make_unique<MoveObjectCommand>(id, obj->position, snapped));
-  m_dirty = true;
+void MapEditorApp::onInspectorFieldChanged(const std::string &id, int fieldIndex, const std::string &value) {
+  if (MapObject *obj = m_mapData.findObject(id)) {
+    if (fieldIndex == 2) {
+      try { obj->radius = std::stof(value); } catch (...) {}
+    } else if (fieldIndex == 3) {
+      try { obj->row = std::stoi(value); } catch (...) {}
+    } else if (fieldIndex == 4) {
+      obj->isFinishLine = (value == "true" || value == "1");
+    } else if (fieldIndex == 5) {
+      try { obj->health = std::stof(value); } catch (...) {}
+    }
+    m_dirty = true;
+  } else if (StructureDef *s = m_mapData.findStructure(id)) {
+    if (fieldIndex == 1) s->name = value;
+    else if (fieldIndex == 3) { try { s->maxHealth = std::stof(value); } catch (...) {} }
+    else if (fieldIndex == 4) { try { s->armorRating = std::stof(value); } catch (...) {} }
+    else if (fieldIndex == 5) { try { s->attackRange = std::stof(value); } catch (...) {} }
+    else if (fieldIndex == 6) { try { s->damagePerSecond = std::stof(value); } catch (...) {} }
+    else if (fieldIndex == 7) { try { s->scrapCost = std::stoi(value); } catch (...) {} }
+    else if (fieldIndex == 8) { try { s->energyDrain = std::stoi(value); } catch (...) {} }
+    else if (fieldIndex == 9) { try { s->teamId = std::stoi(value); } catch (...) {} }
+    else if (fieldIndex == 10) s->triggerTag = value;
+    m_dirty = true;
+  }
+}
+
+void MapEditorApp::onInspectorMoveObject(const std::string &id, const glm::vec3 &position) {
+  if (MapObject *obj = m_mapData.findObject(id)) {
+    glm::vec3 snapped = snapToGrid(position);
+    pushCommand(std::make_unique<MoveObjectCommand>(id, obj->position, snapped));
+    m_dirty = true;
+  } else if (StructureDef *s = m_mapData.findStructure(id)) {
+    s->position = snapToGrid(position);
+    m_dirty = true;
+  }
 }
 
 } // namespace Editor

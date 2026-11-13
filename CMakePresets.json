@@ -1,0 +1,92 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 28,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "linux-debug",
+      "displayName": "Linux x86_64 Debug",
+      "description": "Foundation debug build: client option on, server and tests on.",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/linux-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "RUSTYRAGE_BUILD_CLIENT": "ON",
+        "RUSTYRAGE_BUILD_SERVER": "ON",
+        "RUSTYRAGE_BUILD_TESTS": "ON",
+        "RUSTYRAGE_BUILD_LEGACY_PROTOTYPE": "OFF"
+      }
+    },
+    {
+      "name": "linux-server-only-debug",
+      "displayName": "Linux x86_64 Debug (server only)",
+      "description": "Isolation configuration: client disabled, server and tests on.",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/linux-server-only-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "RUSTYRAGE_BUILD_CLIENT": "OFF",
+        "RUSTYRAGE_BUILD_SERVER": "ON",
+        "RUSTYRAGE_BUILD_TESTS": "ON",
+        "RUSTYRAGE_BUILD_LEGACY_PROTOTYPE": "OFF"
+      }
+    },
+    {
+      "name": "linux-release",
+      "displayName": "Linux x86_64 Release",
+      "description": "Foundation release build.",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/linux-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "RUSTYRAGE_BUILD_CLIENT": "ON",
+        "RUSTYRAGE_BUILD_SERVER": "ON",
+        "RUSTYRAGE_BUILD_TESTS": "ON",
+        "RUSTYRAGE_BUILD_LEGACY_PROTOTYPE": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "linux-debug",
+      "configurePreset": "linux-debug",
+      "jobs": 16
+    },
+    {
+      "name": "linux-server-only-debug",
+      "configurePreset": "linux-server-only-debug",
+      "jobs": 16
+    },
+    {
+      "name": "linux-release",
+      "configurePreset": "linux-release",
+      "jobs": 16
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "linux-debug",
+      "configurePreset": "linux-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-server-only-debug",
+      "configurePreset": "linux-server-only-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-release",
+      "configurePreset": "linux-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

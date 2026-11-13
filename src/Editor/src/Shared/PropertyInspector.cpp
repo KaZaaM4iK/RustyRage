@@ -13,8 +13,8 @@ namespace Editor {
 
 namespace {
 
-constexpr int kRowHeight = 28;
-constexpr int kRowPaddingY = 6;
+constexpr int kRowHeight = 26;
+constexpr int kRowPaddingY = 5;
 constexpr float kPanelPadding = 12.0f;
 
 SDL_Color colorFromUint(uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255) {
@@ -25,7 +25,7 @@ SDL_Color colorFromUint(uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255) {
 
 PropertyInspector::PropertyInspector()
     : m_renderer(nullptr), m_font(nullptr), m_windowHeight(720),
-      m_panelWidth(280) {}
+      m_panelWidth(300) {}
 
 PropertyInspector::~PropertyInspector() { shutdown(); }
 
@@ -63,123 +63,218 @@ bool PropertyInspector::isMouseOverPanel(const glm::vec2 &mousePos,
          mousePos.y >= rect.y && mousePos.y <= rect.y + rect.w;
 }
 
+void PropertyInspector::clearSelection() {
+  m_haveSelection = false;
+  m_selectionType = SelectionType::None;
+  m_objectId.clear();
+  m_rows.clear();
+  m_focusedRow = -1;
+  m_pointIndex = -1;
+}
+
 void PropertyInspector::setSelected(const MapObject *object) {
   if (!object) {
-    m_haveSelection = false;
-    m_objectId.clear();
-    m_rows.clear();
-    m_focusedRow = -1;
-    return;
-  }
-  if (m_haveSelection && m_objectId == object->id) {
-    if (m_focusedRow < 0) {
-      rebuildRows(*object);
-    }
+    clearSelection();
     return;
   }
   m_haveSelection = true;
+  m_selectionType = SelectionType::MapObject;
   m_objectId = object->id;
   m_focusedRow = -1;
   rebuildRows(*object);
 }
 
+void PropertyInspector::setSelectedStructure(const StructureDef *structure) {
+  if (!structure) {
+    clearSelection();
+    return;
+  }
+  m_haveSelection = true;
+  m_selectionType = SelectionType::Structure;
+  m_objectId = structure->id;
+  m_focusedRow = -1;
+  rebuildStructureRows(*structure);
+}
+
+void PropertyInspector::setSelectedTrackPoint(const TrackPoint *point, int pointIndex) {
+  if (!point) {
+    clearSelection();
+    return;
+  }
+  m_haveSelection = true;
+  m_selectionType = SelectionType::TrackPoint;
+  m_pointIndex = pointIndex;
+  m_objectId = "track_point_" + std::to_string(pointIndex);
+  m_focusedRow = -1;
+  rebuildTrackPointRows(*point, pointIndex);
+}
+
+void PropertyInspector::setSelectedTriggerZone(const UgcTriggerZone *zone) {
+  if (!zone) {
+    clearSelection();
+    return;
+  }
+  m_haveSelection = true;
+  m_selectionType = SelectionType::TriggerZone;
+  m_objectId = zone->id;
+  m_focusedRow = -1;
+  rebuildTriggerZoneRows(*zone);
+}
+
 void PropertyInspector::rebuildRows(const MapObject &object) {
   m_rows.clear();
-
   auto addFloat = [&](const std::string &label, float value) {
-    char buf[32];
-    std::snprintf(buf, sizeof(buf), "%.2f", value);
-    FieldRow row;
-    row.label = label;
-    row.kind = EditorKind::Float;
-    row.currentValue = buf;
-    row.buffer = buf;
-    m_rows.push_back(std::move(row));
+    char buf[32]; std::snprintf(buf, sizeof(buf), "%.2f", value);
+    m_rows.push_back({label, EditorKind::Float, buf, buf, false});
   };
   auto addInt = [&](const std::string &label, int value) {
-    FieldRow row;
-    row.label = label;
-    row.kind = EditorKind::Int;
-    row.currentValue = std::to_string(value);
-    row.buffer = row.currentValue;
-    m_rows.push_back(std::move(row));
+    std::string s = std::to_string(value);
+    m_rows.push_back({label, EditorKind::Int, s, s, false});
   };
   auto addBool = [&](const std::string &label, bool value) {
-    FieldRow row;
-    row.label = label;
-    row.kind = EditorKind::Bool;
-    row.currentValue = value ? "true" : "false";
-    row.buffer = row.currentValue;
-    m_rows.push_back(std::move(row));
+    std::string s = value ? "true" : "false";
+    m_rows.push_back({label, EditorKind::Bool, s, s, false});
   };
   auto addString = [&](const std::string &label, const std::string &value) {
-    FieldRow row;
-    row.label = label;
-    row.kind = EditorKind::String;
-    row.currentValue = value;
-    row.buffer = value;
-    m_rows.push_back(std::move(row));
+    m_rows.push_back({label, EditorKind::String, value, value, false});
   };
 
   m_positionSnapshot = object.position;
   char posBuf[64];
-  std::snprintf(posBuf, sizeof(posBuf), "%.2f, %.2f, %.2f", object.position.x,
-                object.position.y, object.position.z);
+  std::snprintf(posBuf, sizeof(posBuf), "%.1f, %.1f, %.1f", object.position.x, object.position.y, object.position.z);
   m_positionStr = posBuf;
-  m_positionBuffer = object.position;
 
-  addString("id", object.id);
-  addString("type", MapData::typeToString(object.type));
-  addFloat("radius", object.radius);
-  addInt("row", object.row);
-  addBool("is_finish", object.isFinishLine);
-  addFloat("health", object.health);
-  addString("model", object.modelPath);
-
-  addFloat("pos x", object.position.x);
-  addFloat("pos y", object.position.y);
-  addFloat("pos z", object.position.z);
-  if (object.type == MapObjectType::PowerUpSpawn) {
-    addInt("subtype", object.subtype);
-  }
+  addString("ID", object.id);
+  addString("Тип", MapData::typeToString(object.type));
+  addFloat("Радиус", object.radius);
+  addInt("Ряд", object.row);
+  addBool("Финиш", object.isFinishLine);
+  addFloat("Прочность", object.health);
+  addFloat("X", object.position.x);
+  addFloat("Y", object.position.y);
+  addFloat("Z", object.position.z);
 }
 
-void PropertyInspector::update(float /*deltaTime*/) {
-  // Cursor blink / text-input lifecycle is driven from the App loop.
+void PropertyInspector::rebuildStructureRows(const StructureDef &structure) {
+  m_rows.clear();
+  auto addFloat = [&](const std::string &label, float value) {
+    char buf[32]; std::snprintf(buf, sizeof(buf), "%.1f", value);
+    m_rows.push_back({label, EditorKind::Float, buf, buf, false});
+  };
+  auto addInt = [&](const std::string &label, int value) {
+    std::string s = std::to_string(value);
+    m_rows.push_back({label, EditorKind::Int, s, s, false});
+  };
+  auto addString = [&](const std::string &label, const std::string &value) {
+    m_rows.push_back({label, EditorKind::String, value, value, false});
+  };
+
+  m_positionSnapshot = structure.position;
+  char posBuf[64];
+  std::snprintf(posBuf, sizeof(posBuf), "%.1f, %.1f, %.1f", structure.position.x, structure.position.y, structure.position.z);
+  m_positionStr = posBuf;
+
+  addString("ID", structure.id);
+  addString("Имя", structure.name);
+  addString("Категория", StructureDef::categoryToString(structure.category));
+  addFloat("Прочность HP", structure.maxHealth);
+  addFloat("Броня %", structure.armorRating);
+  addFloat("Дальность", structure.attackRange);
+  addFloat("Урон/сек", structure.damagePerSecond);
+  addInt("Стоимость", structure.scrapCost);
+  addInt("Энергия", structure.energyDrain);
+  addInt("Команда", structure.teamId);
+  addString("UGC Тег", structure.triggerTag);
 }
+
+void PropertyInspector::rebuildTrackPointRows(const TrackPoint &point, int index) {
+  m_rows.clear();
+  auto addFloat = [&](const std::string &label, float value) {
+    char buf[32]; std::snprintf(buf, sizeof(buf), "%.2f", value);
+    m_rows.push_back({label, EditorKind::Float, buf, buf, false});
+  };
+  auto addBool = [&](const std::string &label, bool value) {
+    std::string s = value ? "true" : "false";
+    m_rows.push_back({label, EditorKind::Bool, s, s, false});
+  };
+  auto addString = [&](const std::string &label, const std::string &value) {
+    m_rows.push_back({label, EditorKind::String, value, value, false});
+  };
+
+  m_positionSnapshot = point.position;
+  char posBuf[64];
+  std::snprintf(posBuf, sizeof(posBuf), "%.1f, %.1f, %.1f", point.position.x, point.position.y, point.position.z);
+  m_positionStr = posBuf;
+
+  addString("Точка #", std::to_string(index));
+  addFloat("Ширина (м)", point.width);
+  addFloat("Крен/Banking", point.banking);
+  addString("Покрытие", trackSurfaceToString(point.surface));
+  addBool("Финиш", point.isFinish);
+  addFloat("X", point.position.x);
+  addFloat("Y (Высота)", point.position.y);
+  addFloat("Z", point.position.z);
+}
+
+void PropertyInspector::rebuildTriggerZoneRows(const UgcTriggerZone &zone) {
+  m_rows.clear();
+  auto addFloat = [&](const std::string &label, float value) {
+    char buf[32]; std::snprintf(buf, sizeof(buf), "%.1f", value);
+    m_rows.push_back({label, EditorKind::Float, buf, buf, false});
+  };
+  auto addInt = [&](const std::string &label, int value) {
+    std::string s = std::to_string(value);
+    m_rows.push_back({label, EditorKind::Int, s, s, false});
+  };
+  auto addString = [&](const std::string &label, const std::string &value) {
+    m_rows.push_back({label, EditorKind::String, value, value, false});
+  };
+
+  m_positionSnapshot = zone.center;
+  char posBuf[64];
+  std::snprintf(posBuf, sizeof(posBuf), "%.1f, %.1f, %.1f", zone.center.x, zone.center.y, zone.center.z);
+  m_positionStr = posBuf;
+
+  addString("ID Зоны", zone.id);
+  addString("Название", zone.name);
+  addFloat("Размер X", zone.extents.x);
+  addFloat("Размер Y", zone.extents.y);
+  addFloat("Размер Z", zone.extents.z);
+  addInt("Фильтр команды", zone.filterTeam);
+}
+
+void PropertyInspector::update(float /*deltaTime*/) {}
 
 void PropertyInspector::renderRow(const FieldRow &row, float &y, float x) {
-  const SDL_Color labelColor = colorFromUint(180, 200, 220);
+  const SDL_Color labelColor = colorFromUint(170, 195, 220);
   const SDL_Color valueColor =
-      row.focused ? colorFromUint(255, 255, 255) : colorFromUint(220, 220, 230);
+      row.focused ? colorFromUint(255, 255, 255) : colorFromUint(220, 225, 235);
 
   renderText(row.label, x, y, labelColor);
 
   const SDL_Color boxColor =
-      row.focused ? colorFromUint(80, 130, 200) : colorFromUint(40, 50, 70);
-  SDL_FRect valueBox{x + 90.0f, y - 2.0f, 160.0f, kRowHeight - 4.0f};
+      row.focused ? colorFromUint(70, 120, 200) : colorFromUint(35, 45, 60);
+  SDL_FRect valueBox{x + 105.0f, y - 2.0f, 160.0f, kRowHeight - 4.0f};
   SDL_SetRenderDrawColor(m_renderer, boxColor.r, boxColor.g, boxColor.b, 255);
   SDL_RenderFillRect(m_renderer, &valueBox);
 
   const std::string shown = row.focused ? row.buffer : row.currentValue;
-  renderText(shown, x + 96.0f, y, valueColor);
+  renderText(shown, x + 110.0f, y, valueColor);
 
   y += kRowHeight;
 }
 
 void PropertyInspector::render(int windowWidth) {
-  if (!m_renderer)
-    return;
-  if (!m_haveSelection)
+  if (!m_renderer || !m_haveSelection)
     return;
 
-  SDL_SetRenderDrawColor(m_renderer, 22, 28, 38, 255);
+  SDL_SetRenderDrawColor(m_renderer, 20, 24, 34, 255);
   const auto rect = getPanelRect(windowWidth);
   SDL_FRect panelRect{static_cast<float>(rect.x), static_cast<float>(rect.y),
                       static_cast<float>(rect.z), static_cast<float>(rect.w)};
   SDL_RenderFillRect(m_renderer, &panelRect);
 
-  SDL_SetRenderDrawColor(m_renderer, 50, 60, 80, 255);
+  SDL_SetRenderDrawColor(m_renderer, 45, 55, 75, 255);
   SDL_RenderLine(m_renderer, static_cast<float>(rect.x),
                  static_cast<float>(rect.y), static_cast<float>(rect.x),
                  static_cast<float>(rect.y + rect.w));
@@ -187,8 +282,13 @@ void PropertyInspector::render(int windowWidth) {
   float y = rect.y + kPanelPadding;
   const float x = static_cast<float>(rect.x) + kPanelPadding;
 
-  renderText("Свойства", x, y, colorFromUint(255, 220, 120));
-  y += kRowHeight;
+  std::string title = "Инспектор Параметров";
+  if (m_selectionType == SelectionType::Structure) title = "Параметры Строения";
+  else if (m_selectionType == SelectionType::TrackPoint) title = "Узел Трассы";
+  else if (m_selectionType == SelectionType::TriggerZone) title = "UGC Триггер-Зона";
+
+  renderText(title, x, y, colorFromUint(255, 220, 110));
+  y += kRowHeight + 4.0f;
 
   for (auto &row : m_rows) {
     renderRow(row, y, x);
@@ -196,9 +296,9 @@ void PropertyInspector::render(int windowWidth) {
   }
 
   y += kRowPaddingY * 2;
-  renderText("Позиция:", x, y, colorFromUint(200, 200, 200));
+  renderText("Координаты (X, Y, Z):", x, y, colorFromUint(180, 200, 220));
   y += kRowHeight;
-  renderText(m_positionStr, x, y, colorFromUint(220, 220, 220));
+  renderText(m_positionStr, x, y, colorFromUint(230, 230, 240));
 }
 
 void PropertyInspector::renderText(const std::string &text, float x, float y,
@@ -219,32 +319,20 @@ void PropertyInspector::renderText(const std::string &text, float x, float y,
   SDL_DestroySurface(surface);
 }
 
-bool PropertyInspector::isPointInRect(const glm::vec2 &p, const glm::vec2 &pos,
-                                      const glm::vec2 &size) const {
-  return p.x >= pos.x && p.x <= pos.x + size.x && p.y >= pos.y &&
-         p.y <= pos.y + size.y;
-}
-
 void PropertyInspector::handleTextInput(const std::string &text) {
-  if (!m_haveSelection || m_focusedRow < 0)
+  if (!m_haveSelection || m_focusedRow < 0 || m_focusedRow >= static_cast<int>(m_rows.size()))
     return;
-  if (m_focusedRow >= static_cast<int>(m_rows.size()))
-    return;
-  FieldRow &row = m_rows[m_focusedRow];
-  row.buffer += text;
+  m_rows[m_focusedRow].buffer += text;
 }
 
 void PropertyInspector::handleKeyDown(SDL_Keycode key) {
-  if (!m_haveSelection || m_focusedRow < 0)
-    return;
-  if (m_focusedRow >= static_cast<int>(m_rows.size()))
+  if (!m_haveSelection || m_focusedRow < 0 || m_focusedRow >= static_cast<int>(m_rows.size()))
     return;
   FieldRow &row = m_rows[m_focusedRow];
 
   if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
     if (row.currentValue != row.buffer && m_onFieldChanged) {
-      int fieldIndex = m_focusedRow;
-      m_onFieldChanged(m_objectId, fieldIndex, row.buffer);
+      m_onFieldChanged(m_objectId, m_focusedRow, row.buffer);
       row.currentValue = row.buffer;
     }
     row.focused = false;
@@ -275,23 +363,19 @@ bool PropertyInspector::handleMouseClick(const glm::vec2 &mousePos,
     return false;
   }
 
-  // Header row (title) occupies one slot — start scanning rows just below.
-  float y = rect.y + kPanelPadding + kRowHeight;
+  float y = rect.y + kPanelPadding + kRowHeight + 4.0f;
   const float x = static_cast<float>(rect.x) + kPanelPadding;
 
   for (int i = 0; i < static_cast<int>(m_rows.size()); ++i) {
     const float rowTop = y;
     const float rowBottom = rowTop + kRowHeight;
     if (mousePos.y >= rowTop && mousePos.y <= rowBottom) {
-      // Click inside value box region only (past the label).
-      if (mousePos.x >= x + 90.0f) {
+      if (mousePos.x >= x + 105.0f) {
         m_focusedRow = i;
         m_rows[i].focused = true;
         m_rows[i].buffer = m_rows[i].currentValue;
       } else {
-        // Click on the label: defocus any prior row.
-        if (m_focusedRow >= 0 &&
-            m_focusedRow < static_cast<int>(m_rows.size())) {
+        if (m_focusedRow >= 0 && m_focusedRow < static_cast<int>(m_rows.size())) {
           m_rows[m_focusedRow].focused = false;
         }
         m_focusedRow = -1;

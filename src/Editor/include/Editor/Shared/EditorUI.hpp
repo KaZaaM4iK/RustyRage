@@ -1,5 +1,8 @@
 #pragma once
 
+#include "Editor/Building/StructureDef.hpp"
+#include "Editor/Logic/UgcLogic.hpp"
+
 #include <SDL3/SDL.h>
 #include <SDL3_ttf/SDL_ttf.h>
 #include <functional>
@@ -11,15 +14,26 @@ struct SDL_Renderer;
 
 namespace Editor {
 
+enum class EditorWorkspaceMode {
+  TrackAndArena,
+  BaseArchitect,
+  VehicleWorkshop,
+  UgcLogicStudio
+};
+
 enum class EditorTool {
   Select,
+  EditTrack,
   PlaceSpawn,
   PlaceCheckpoint,
   PlacePowerUp,
-  PlaceDestructible,
-  PlaceObstacle,
-  PlaceDecoration,
-  EditTrack,
+  PlaceStructureWall,
+  PlaceStructureTurret,
+  PlaceStructureUtility,
+  PlaceStructurePower,
+  PlaceTriggerZone,
+  PlaceHazard,
+  PlaceJumpPad,
   Delete
 };
 
@@ -36,6 +50,9 @@ public:
   void setMousePosition(const glm::vec2 &position);
   void render();
 
+  void setWorkspaceMode(EditorWorkspaceMode mode);
+  EditorWorkspaceMode getWorkspaceMode() const { return m_workspaceMode; }
+
   void setCurrentTool(EditorTool tool);
   EditorTool getCurrentTool() const { return m_currentTool; }
   int getSpawnRow() const { return m_spawnRow; }
@@ -46,6 +63,7 @@ public:
   void setCurrentFilePath(const std::string &path);
   void setMapName(const std::string &name);
   void setObjectCount(int count);
+  void setStructureCount(int count) { m_structureCount = count; }
   void setSelectedObjectId(const std::string &id);
   void setMapFileList(const std::vector<std::string> &files);
   void setUndoLabel(const std::string &label);
@@ -77,6 +95,12 @@ public:
   void setOnRaceGrid(std::function<void()> callback) {
     m_onRaceGrid = std::move(callback);
   }
+  void setOnSwitchMode(std::function<void(EditorWorkspaceMode)> callback) {
+    m_onSwitchMode = std::move(callback);
+  }
+  void setOnExportUgcPackage(std::function<void()> callback) {
+    m_onExportUgcPackage = std::move(callback);
+  }
 
   void handleMouseClick(const glm::vec2 &position);
 
@@ -88,6 +112,7 @@ private:
     glm::vec2 size;
     std::function<void()> onClick;
     bool highlighted = false;
+    bool active = false;
   };
 
   SDL_Renderer *m_renderer;
@@ -99,12 +124,14 @@ private:
   int m_toolbarHeight;
   int m_sidePanelWidth;
 
+  EditorWorkspaceMode m_workspaceMode = EditorWorkspaceMode::TrackAndArena;
   EditorTool m_currentTool;
   int m_spawnRow;
   std::string m_statusMessage;
   std::string m_currentFilePath;
   std::string m_mapName;
   int m_objectCount;
+  int m_structureCount = 0;
   std::string m_selectedObjectId;
   std::vector<std::string> m_mapFileList;
   glm::vec2 m_mousePosition{0.0f};
@@ -126,6 +153,8 @@ private:
   std::function<void()> m_onDeleteSelected;
   std::function<void()> m_onToggleTrackClosed;
   std::function<void()> m_onRaceGrid;
+  std::function<void(EditorWorkspaceMode)> m_onSwitchMode;
+  std::function<void()> m_onExportUgcPackage;
 
   void rebuildButtons();
   void renderPanel();

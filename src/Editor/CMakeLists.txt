@@ -6,6 +6,8 @@ add_library(Editor STATIC
     src/Map/MapEditorApp.cpp
     src/Map/TrackMesh.cpp
     src/Vehicle/VehicleDef.cpp
+    src/Building/StructureDef.cpp
+    src/Logic/UgcLogic.cpp
     src/Shared/UndoStack.cpp
     src/Shared/PropertyInspector.cpp
     src/Vehicle/VehicleEditorApp.cpp

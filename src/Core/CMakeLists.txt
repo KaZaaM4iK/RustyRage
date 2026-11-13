@@ -1,9 +1,11 @@
 # Core module - Engine components
 add_library(Core STATIC
     src/Application.cpp
+    src/Audio.cpp
     src/Camera.cpp
     src/Config.cpp
     src/InputManager.cpp
+    src/Localization.cpp
     src/Logging.cpp
     src/Model.cpp
     src/Physics.cpp

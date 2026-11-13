@@ -9,9 +9,10 @@ namespace Editor {
 EditorUI::EditorUI()
     : m_renderer(nullptr), m_font(nullptr), m_fontSmall(nullptr),
       m_windowWidth(1600), m_windowHeight(900), m_toolbarHeight(72),
-      m_sidePanelWidth(220), m_currentTool(EditorTool::Select), m_spawnRow(1),
+      m_sidePanelWidth(230), m_workspaceMode(EditorWorkspaceMode::TrackAndArena),
+      m_currentTool(EditorTool::Select), m_spawnRow(1),
       m_statusMessage("Готов"), m_currentFilePath("maps/untitled.rrmap"),
-      m_mapName("New Map"), m_objectCount(0) {}
+      m_mapName("New Map"), m_objectCount(0), m_structureCount(0) {}
 
 EditorUI::~EditorUI() { shutdown(); }
 
@@ -71,6 +72,11 @@ void EditorUI::setMousePosition(const glm::vec2 &position) {
 }
 
 void EditorUI::render() { renderPanel(); }
+
+void EditorUI::setWorkspaceMode(EditorWorkspaceMode mode) {
+  m_workspaceMode = mode;
+  rebuildButtons();
+}
 
 void EditorUI::setCurrentTool(EditorTool tool) {
   m_currentTool = tool;
@@ -134,12 +140,12 @@ void EditorUI::handleMouseClick(const glm::vec2 &position) {
 void EditorUI::rebuildButtons() {
   m_buttons.clear();
 
-  const float buttonWidth = 180.0f;
-  const float buttonHeight = 34.0f;
-  float y = 16.0f;
+  const float buttonWidth = 190.0f;
+  const float buttonHeight = 32.0f;
+  float y = 14.0f;
 
   auto addButton = [&](const std::string &id, const std::string &label,
-                       std::function<void()> onClick, bool highlighted) {
+                       std::function<void()> onClick, bool highlighted, bool active = false) {
     Button button;
     button.id = id;
     button.label = label;
@@ -147,106 +153,70 @@ void EditorUI::rebuildButtons() {
     button.size = glm::vec2(buttonWidth, buttonHeight);
     button.onClick = std::move(onClick);
     button.highlighted = highlighted;
+    button.active = active;
     m_buttons.push_back(button);
-    y += buttonHeight + 8.0f;
+    y += buttonHeight + 6.0f;
   };
 
-  addButton("new", "Новая карта", m_onNewMap, false);
-  addButton("save", "Сохранить", m_onSaveMap, false);
+  // Top Workspace Modes Tab Buttons
+  addButton("mode_tracks", "[1] Трассы & Арена", [this]() {
+    if (m_onSwitchMode) m_onSwitchMode(EditorWorkspaceMode::TrackAndArena);
+    else setWorkspaceMode(EditorWorkspaceMode::TrackAndArena);
+  }, m_workspaceMode == EditorWorkspaceMode::TrackAndArena, true);
 
-  y += 8.0f;
-  addButton(
-      "tool_select", "Выбор (1)",
-      [this]() {
-        m_currentTool = EditorTool::Select;
-        rebuildButtons();
-      },
-      m_currentTool == EditorTool::Select);
-  addButton(
-      "tool_spawn", "Спавн (2)",
-      [this]() {
-        m_currentTool = EditorTool::PlaceSpawn;
-        rebuildButtons();
-      },
-      m_currentTool == EditorTool::PlaceSpawn);
-  addButton(
-      "tool_checkpoint", "Чекпоинт (3)",
-      [this]() {
-        m_currentTool = EditorTool::PlaceCheckpoint;
-        rebuildButtons();
-      },
-      m_currentTool == EditorTool::PlaceCheckpoint);
-  addButton(
-      "tool_powerup", "Пауэр-ап (4)",
-      [this]() {
-        m_currentTool = EditorTool::PlacePowerUp;
-        rebuildButtons();
-      },
-      m_currentTool == EditorTool::PlacePowerUp);
-  addButton(
-      "tool_destructible", "Разрушаемое (5)",
-      [this]() {
-        m_currentTool = EditorTool::PlaceDestructible;
-        rebuildButtons();
-      },
-      m_currentTool == EditorTool::PlaceDestructible);
-  addButton(
-      "tool_obstacle", "Препятствие (7)",
-      [this]() {
-        m_currentTool = EditorTool::PlaceObstacle;
-        rebuildButtons();
-      },
-      m_currentTool == EditorTool::PlaceObstacle);
-  addButton(
-      "tool_decoration", "Декор (8)",
-      [this]() {
-        m_currentTool = EditorTool::PlaceDecoration;
-        rebuildButtons();
-      },
-      m_currentTool == EditorTool::PlaceDecoration);
-  addButton(
-      "tool_track", "Трасса (6)",
-      [this]() {
-        m_currentTool = EditorTool::EditTrack;
-        rebuildButtons();
-      },
-      m_currentTool == EditorTool::EditTrack);
-  addButton(
-      "tool_delete", "Удалить (Del)",
-      [this]() {
-        m_currentTool = EditorTool::Delete;
-        rebuildButtons();
-      },
-      m_currentTool == EditorTool::Delete);
+  addButton("mode_base", "[2] Базы & Строения", [this]() {
+    if (m_onSwitchMode) m_onSwitchMode(EditorWorkspaceMode::BaseArchitect);
+    else setWorkspaceMode(EditorWorkspaceMode::BaseArchitect);
+  }, m_workspaceMode == EditorWorkspaceMode::BaseArchitect, true);
 
-  y += 8.0f;
-  addButton(
-      "row1", "Ряд 1",
-      [this]() {
-        m_spawnRow = 1;
-        rebuildButtons();
-      },
-      m_spawnRow == 1);
-  addButton(
-      "row2", "Ряд 2",
-      [this]() {
-        m_spawnRow = 2;
-        rebuildButtons();
-      },
-      m_spawnRow == 2);
-  addButton("delete_selected", "Удалить выбранное", m_onDeleteSelected, false);
-  addButton("track_closed", "Замкнуть/разомкнуть трассу", m_onToggleTrackClosed,
-            false);
-  addButton(
-      "race_grid", "Сетка старта 4+4 (Ctrl+R)",
-      [this]() {
-        if (m_onRaceGrid)
-          m_onRaceGrid();
-      },
-      false);
+  addButton("mode_ugc", "[3] UGC Логика & Правила", [this]() {
+    if (m_onSwitchMode) m_onSwitchMode(EditorWorkspaceMode::UgcLogicStudio);
+    else setWorkspaceMode(EditorWorkspaceMode::UgcLogicStudio);
+  }, m_workspaceMode == EditorWorkspaceMode::UgcLogicStudio, true);
 
-  y += 8.0f;
-  const size_t maxVisibleMaps = 12;
+  y += 6.0f;
+  addButton("new", "Создать Новую Карту", m_onNewMap, false);
+  addButton("save", "Сохранить (Ctrl+S)", m_onSaveMap, false);
+  addButton("export_ugc", "Экспорт UGC Мода", [this]() {
+    if (m_onExportUgcPackage) m_onExportUgcPackage();
+  }, false);
+
+  y += 6.0f;
+
+  if (m_workspaceMode == EditorWorkspaceMode::TrackAndArena) {
+    addButton("tool_select", "Выбор (1)", [this]() { m_currentTool = EditorTool::Select; rebuildButtons(); }, m_currentTool == EditorTool::Select);
+    addButton("tool_track", "Сплайн Трассы (2)", [this]() { m_currentTool = EditorTool::EditTrack; rebuildButtons(); }, m_currentTool == EditorTool::EditTrack);
+    addButton("tool_spawn", "Спавн Машин (3)", [this]() { m_currentTool = EditorTool::PlaceSpawn; rebuildButtons(); }, m_currentTool == EditorTool::PlaceSpawn);
+    addButton("tool_checkpoint", "Чекпоинт (4)", [this]() { m_currentTool = EditorTool::PlaceCheckpoint; rebuildButtons(); }, m_currentTool == EditorTool::PlaceCheckpoint);
+    addButton("tool_powerup", "Оружие / Бонус (5)", [this]() { m_currentTool = EditorTool::PlacePowerUp; rebuildButtons(); }, m_currentTool == EditorTool::PlacePowerUp);
+    addButton("tool_jump", "Трамплин / Джамппад (6)", [this]() { m_currentTool = EditorTool::PlaceJumpPad; rebuildButtons(); }, m_currentTool == EditorTool::PlaceJumpPad);
+    addButton("tool_hazard", "Дробилка / Ловушка (7)", [this]() { m_currentTool = EditorTool::PlaceHazard; rebuildButtons(); }, m_currentTool == EditorTool::PlaceHazard);
+    addButton("tool_delete", "Удалить (Del)", [this]() { m_currentTool = EditorTool::Delete; rebuildButtons(); }, m_currentTool == EditorTool::Delete);
+
+    y += 4.0f;
+    addButton("track_closed", "Замкнуть кольцо трассы", m_onToggleTrackClosed, false);
+    addButton("race_grid", "Сетка старта 4+4", [this]() { if (m_onRaceGrid) m_onRaceGrid(); }, false);
+  } else if (m_workspaceMode == EditorWorkspaceMode::BaseArchitect) {
+    addButton("tool_select", "Выбор (1)", [this]() { m_currentTool = EditorTool::Select; rebuildButtons(); }, m_currentTool == EditorTool::Select);
+    addButton("bld_wall", "Стена / Баррикада (2)", [this]() { m_currentTool = EditorTool::PlaceStructureWall; rebuildButtons(); }, m_currentTool == EditorTool::PlaceStructureWall);
+    addButton("bld_turret", "Авто-Турель 20мм (3)", [this]() { m_currentTool = EditorTool::PlaceStructureTurret; rebuildButtons(); }, m_currentTool == EditorTool::PlaceStructureTurret);
+    addButton("bld_repair", "Эстакада Ремонта (4)", [this]() { m_currentTool = EditorTool::PlaceStructureUtility; rebuildButtons(); }, m_currentTool == EditorTool::PlaceStructureUtility);
+    addButton("bld_gen", "Дизель-Генератор (5)", [this]() { m_currentTool = EditorTool::PlaceStructurePower; rebuildButtons(); }, m_currentTool == EditorTool::PlaceStructurePower);
+    addButton("tool_delete", "Снести Объект (Del)", [this]() { m_currentTool = EditorTool::Delete; rebuildButtons(); }, m_currentTool == EditorTool::Delete);
+  } else if (m_workspaceMode == EditorWorkspaceMode::UgcLogicStudio) {
+    addButton("tool_select", "Выбор Триггера (1)", [this]() { m_currentTool = EditorTool::Select; rebuildButtons(); }, m_currentTool == EditorTool::Select);
+    addButton("ugc_zone", "Создать Триггер-Зону (2)", [this]() { m_currentTool = EditorTool::PlaceTriggerZone; rebuildButtons(); }, m_currentTool == EditorTool::PlaceTriggerZone);
+    addButton("ugc_add_airdrop", "+ Сброс Аирдропа", [this]() {
+      setStatusMessage("Добавлено UGC правило: Аирдроп по таймеру 45с");
+    }, false);
+    addButton("ugc_add_boss", "+ Рейд Банды Босса", [this]() {
+      setStatusMessage("Добавлено UGC правило: Спавн Тяжелого Босса");
+    }, false);
+    addButton("tool_delete", "Удалить Правило (Del)", [this]() { m_currentTool = EditorTool::Delete; rebuildButtons(); }, m_currentTool == EditorTool::Delete);
+  }
+
+  y += 6.0f;
+  const size_t maxVisibleMaps = 8;
   size_t shown = 0;
   for (const std::string &file : m_mapFileList) {
     if (shown >= maxVisibleMaps) {
@@ -254,7 +224,7 @@ void EditorUI::rebuildButtons() {
     }
     ++shown;
     addButton(
-        "load_" + file, "Открыть: " + file,
+        "load_" + file, "Карта: " + file,
         [this, file]() {
           if (m_onLoadMap) {
             m_onLoadMap(file);
@@ -267,13 +237,13 @@ void EditorUI::rebuildButtons() {
 void EditorUI::renderPanel() {
   SDL_FRect sidePanel{0.0f, 0.0f, static_cast<float>(m_sidePanelWidth),
                       static_cast<float>(m_windowHeight)};
-  SDL_SetRenderDrawColor(m_renderer, 28, 32, 40, 255);
+  SDL_SetRenderDrawColor(m_renderer, 24, 28, 38, 255);
   SDL_RenderFillRect(m_renderer, &sidePanel);
 
   SDL_FRect toolbar{0.0f, static_cast<float>(m_windowHeight - m_toolbarHeight),
                     static_cast<float>(m_windowWidth),
                     static_cast<float>(m_toolbarHeight)};
-  SDL_SetRenderDrawColor(m_renderer, 24, 28, 36, 255);
+  SDL_SetRenderDrawColor(m_renderer, 18, 22, 30, 255);
   SDL_RenderFillRect(m_renderer, &toolbar);
 
   const glm::vec2 mousePos = m_mousePosition;
@@ -283,77 +253,75 @@ void EditorUI::renderPanel() {
 
   if (m_font) {
     char header[160];
-    std::snprintf(header, sizeof(header), "Редактор карт RustyRage%s",
+    std::snprintf(header, sizeof(header), "RustyRage AAA Creator Studio%s",
                   m_dirty ? "  *" : "");
-    renderText(header, 20.0f, static_cast<float>(m_windowHeight - 62.0f),
-               {220, 220, 230, 255}, m_font);
-    renderText("Карта: " + m_mapName, 360.0f,
-               static_cast<float>(m_windowHeight - 62.0f), {180, 200, 220, 255},
+    renderText(header, 20.0f, static_cast<float>(m_windowHeight - 64.0f),
+               {230, 230, 245, 255}, m_font);
+    
+    renderText("Проект: " + m_mapName, 360.0f,
+               static_cast<float>(m_windowHeight - 64.0f), {190, 210, 235, 255},
                m_fontSmall);
     renderText("Файл: " + m_currentFilePath, 360.0f,
-               static_cast<float>(m_windowHeight - 40.0f), {140, 160, 180, 255},
+               static_cast<float>(m_windowHeight - 42.0f), {140, 160, 180, 255},
                m_fontSmall);
-    renderText("Объектов: " + std::to_string(m_objectCount), 900.0f,
-               static_cast<float>(m_windowHeight - 62.0f), {180, 200, 220, 255},
+
+    char statsBuf[180];
+    std::snprintf(statsBuf, sizeof(statsBuf), "Объектов: %d | Строений: %d | Сплайнов: %d | Режим: %s",
+                  m_objectCount, m_structureCount, m_trackPointCount, m_mapMode.c_str());
+    renderText(statsBuf, 780.0f,
+               static_cast<float>(m_windowHeight - 64.0f), {170, 215, 240, 255},
                m_fontSmall);
-    renderText("Режим: " + m_mapMode +
-                   " | Кругов: " + std::to_string(m_lapCount) +
-                   " | Точек: " + std::to_string(m_trackPointCount),
-               900.0f, static_cast<float>(m_windowHeight - 18.0f),
-               {160, 190, 210, 255}, m_fontSmall);
-    renderText("Инструмент: " + toolLabel(m_currentTool), 900.0f,
-               static_cast<float>(m_windowHeight - 40.0f), {180, 200, 220, 255},
+
+    renderText("Инструмент: " + toolLabel(m_currentTool), 780.0f,
+               static_cast<float>(m_windowHeight - 42.0f), {200, 210, 220, 255},
                m_fontSmall);
+
     if (!m_selectedObjectId.empty()) {
-      renderText("Выбрано: " + m_selectedObjectId, 1120.0f,
-                 static_cast<float>(m_windowHeight - 62.0f),
-                 {255, 220, 120, 255}, m_fontSmall);
+      renderText("Выбрано: " + m_selectedObjectId, 1200.0f,
+                 static_cast<float>(m_windowHeight - 64.0f),
+                 {255, 225, 110, 255}, m_fontSmall);
     }
-    renderText(m_statusMessage, 1120.0f,
-               static_cast<float>(m_windowHeight - 40.0f), {140, 220, 140, 255},
+    renderText(m_statusMessage, 1200.0f,
+               static_cast<float>(m_windowHeight - 42.0f), {130, 235, 140, 255},
                m_fontSmall);
 
-    std::string undoText = "Undo: ";
-    undoText += m_undoLabel.empty() ? "—" : m_undoLabel;
-    std::string redoText = "Redo: ";
-    redoText += m_redoLabel.empty() ? "—" : m_redoLabel;
-    renderText(undoText, 20.0f, static_cast<float>(m_windowHeight - 30.0f),
-               {200, 180, 120, 255}, m_fontSmall);
-    renderText(redoText, 220.0f, static_cast<float>(m_windowHeight - 30.0f),
-               {200, 180, 120, 255}, m_fontSmall);
+    std::string undoText = "Undo: " + (m_undoLabel.empty() ? "—" : m_undoLabel);
+    std::string redoText = "Redo: " + (m_redoLabel.empty() ? "—" : m_redoLabel);
+    renderText(undoText, 20.0f, static_cast<float>(m_windowHeight - 24.0f),
+               {210, 190, 130, 255}, m_fontSmall);
+    renderText(redoText, 220.0f, static_cast<float>(m_windowHeight - 24.0f),
+               {210, 190, 130, 255}, m_fontSmall);
 
-    char gridBuf[80];
-    std::snprintf(gridBuf, sizeof(gridBuf), "Сетка: %s, шаг %.2f м (Ctrl+G)",
-                  m_gridSnap ? "вкл" : "выкл", m_gridSize);
-    renderText(gridBuf, 420.0f, static_cast<float>(m_windowHeight - 30.0f),
-               {160, 200, 220, 255}, m_fontSmall);
-    renderText("L круги | M режим | Ctrl+R сетка 4+4 | P пауэр-ап | Tab | F "
-               "фокус | I точка | Стрелки",
-               700.0f, static_cast<float>(m_windowHeight - 30.0f),
-               {120, 130, 150, 255}, m_fontSmall);
+    char gridBuf[100];
+    std::snprintf(gridBuf, sizeof(gridBuf), "Сетка: %s, шаг %.2f м | 1-3 Режимы Студии | Tab Фокус",
+                  m_gridSnap ? "ВКЛ" : "ВЫКЛ", m_gridSize);
+    renderText(gridBuf, 440.0f, static_cast<float>(m_windowHeight - 24.0f),
+               {150, 190, 210, 255}, m_fontSmall);
   }
 }
 
 void EditorUI::renderButton(const Button &button, const glm::vec2 &mousePos) {
   const bool hovered = isPointInRect(mousePos, button.position, button.size);
   if (button.highlighted) {
-    SDL_SetRenderDrawColor(m_renderer, 70, 120, 180, 255);
+    SDL_SetRenderDrawColor(m_renderer, 60, 130, 210, 255);
+  } else if (button.active) {
+    SDL_SetRenderDrawColor(m_renderer, 45, 75, 110, 255);
   } else if (hovered) {
-    SDL_SetRenderDrawColor(m_renderer, 55, 65, 80, 255);
+    SDL_SetRenderDrawColor(m_renderer, 50, 60, 75, 255);
   } else {
-    SDL_SetRenderDrawColor(m_renderer, 42, 48, 58, 255);
+    SDL_SetRenderDrawColor(m_renderer, 32, 38, 48, 255);
   }
 
   SDL_FRect rect{button.position.x, button.position.y, button.size.x,
                  button.size.y};
   SDL_RenderFillRect(m_renderer, &rect);
 
-  SDL_SetRenderDrawColor(m_renderer, 90, 100, 120, 255);
+  SDL_SetRenderDrawColor(m_renderer, button.highlighted ? 110 : 70, button.highlighted ? 180 : 90, button.highlighted ? 255 : 110, 255);
   SDL_RenderRect(m_renderer, &rect);
 
   if (m_fontSmall) {
-    renderText(button.label, button.position.x + 10.0f,
-               button.position.y + 8.0f, {230, 230, 240, 255}, m_fontSmall);
+    renderText(button.label, button.position.x + 8.0f,
+               button.position.y + 7.0f, {235, 235, 245, 255}, m_fontSmall);
   }
 }
 
@@ -387,26 +355,20 @@ bool EditorUI::isPointInRect(const glm::vec2 &point, const glm::vec2 &pos,
 
 std::string EditorUI::toolLabel(EditorTool tool) const {
   switch (tool) {
-  case EditorTool::Select:
-    return "Выбор";
-  case EditorTool::PlaceSpawn:
-    return "Спавн";
-  case EditorTool::PlaceCheckpoint:
-    return "Чекпоинт";
-  case EditorTool::PlacePowerUp:
-    return "Пауэр-ап";
-  case EditorTool::PlaceDestructible:
-    return "Разрушаемое";
-  case EditorTool::PlaceObstacle:
-    return "Препятствие";
-  case EditorTool::PlaceDecoration:
-    return "Декор";
-  case EditorTool::EditTrack:
-    return "Трасса";
-  case EditorTool::Delete:
-    return "Удаление";
-  default:
-    return "Неизвестно";
+  case EditorTool::Select: return "Выбор";
+  case EditorTool::EditTrack: return "Сплайн Трассы";
+  case EditorTool::PlaceSpawn: return "Спавн Машин";
+  case EditorTool::PlaceCheckpoint: return "Чекпоинт";
+  case EditorTool::PlacePowerUp: return "Оружие / Бонус";
+  case EditorTool::PlaceStructureWall: return "Стена / Баррикада";
+  case EditorTool::PlaceStructureTurret: return "Авто-Турель";
+  case EditorTool::PlaceStructureUtility: return "Станция Ремонта";
+  case EditorTool::PlaceStructurePower: return "Генератор Энергии";
+  case EditorTool::PlaceTriggerZone: return "UGC Триггер-Зона";
+  case EditorTool::PlaceHazard: return "Ловушка / Дробилка";
+  case EditorTool::PlaceJumpPad: return "Трамплин";
+  case EditorTool::Delete: return "Удаление / Снос";
+  default: return "Выбор";
   }
 }
 

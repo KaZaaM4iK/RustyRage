@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Editor/Building/StructureDef.hpp"
+#include "Editor/Logic/UgcLogic.hpp"
 #include "Editor/Map/MapData.hpp"
 #include "Editor/Shared/EditorCamera.hpp"
 #include "Editor/Shared/EditorRenderer.hpp"
@@ -45,6 +47,8 @@ private:
   std::string m_currentFilePath;
   std::string m_selectedObjectId;
   uint32_t m_objectIdCounter;
+  uint32_t m_structureIdCounter;
+  uint32_t m_zoneIdCounter;
 
   // Track-edit state
   int m_selectedTrackPoint = -1;
@@ -74,12 +78,15 @@ private:
   void loadMap(const std::string &path);
   void refreshMapList();
   void deleteSelected();
+  void exportUgcModPackage();
   void undo();
   void redo();
   void cycleGridSize();
 
   void handleViewportClick(const glm::vec2 &screenPos);
   void placeObjectAt(const glm::vec3 &position);
+  void placeStructureAt(const glm::vec3 &position, StructureType type);
+  void placeTriggerZoneAt(const glm::vec3 &position);
   void addTrackPointAt(const glm::vec3 &position);
   void deleteTrackPoint(int index);
   void adjustSelectedTrackWidth(float delta);
@@ -91,10 +98,10 @@ private:
   void toggleTrackClosed();
   void selectTrackPointNear(const glm::vec2 &screenPos);
   void selectObjectAt(const glm::vec2 &screenPos);
-  MapObject *findObjectNear(const glm::vec2 &screenPos,
-                            float maxDistance = 20.0f);
-  int findTrackPointNear(const glm::vec2 &screenPos,
-                         float maxDistance = 18.0f) const;
+  
+  MapObject *findObjectNear(const glm::vec2 &screenPos, float maxDistance = 22.0f);
+  StructureDef *findStructureNear(const glm::vec2 &screenPos, float maxDistance = 25.0f);
+  int findTrackPointNear(const glm::vec2 &screenPos, float maxDistance = 20.0f) const;
 
   void pushCommand(std::unique_ptr<Command> cmd);
   glm::vec3 snapToGrid(const glm::vec3 &p) const;

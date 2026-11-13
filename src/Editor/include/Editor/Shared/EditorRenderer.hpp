@@ -1,5 +1,8 @@
 #pragma once
 
+#include "Editor/Building/StructureDef.hpp"
+#include "Editor/Logic/UgcLogic.hpp"
+
 #include <SDL3/SDL.h>
 #include <glm/glm.hpp>
 #include <vector>
@@ -33,6 +36,8 @@ private:
     void drawGrid(const EditorCamera& camera);
     void drawBoundary(const MapData& mapData, const EditorCamera& camera);
     void drawObject(const MapObject& object, const EditorCamera& camera, bool selected);
+    void drawStructure(const StructureDef& structure, const EditorCamera& camera, bool selected);
+    void drawTriggerZone(const UgcTriggerZone& zone, const EditorCamera& camera);
     void drawTrack(const MapData& mapData, const EditorCamera& camera, int selectedPoint);
     void drawTrackSegment(const glm::vec3& aLeft, const glm::vec3& aRight,
                           const glm::vec3& bLeft, const glm::vec3& bRight,
@@ -41,6 +46,8 @@ private:
     void drawLine3D(const glm::vec3& a, const glm::vec3& b, const EditorCamera& camera,
                      Uint8 red, Uint8 green, Uint8 blue, Uint8 alpha = 255);
 
+    void drawBox3D(const glm::vec3& center, const glm::vec3& extents, const EditorCamera& camera,
+                   Uint8 r, Uint8 g, Uint8 b, Uint8 a = 255);
     void drawCross3D(const glm::vec3& center, float size, const EditorCamera& camera,
                      Uint8 r, Uint8 g, Uint8 b);
     void drawCircle3D(const glm::vec3& center, float radius, const EditorCamera& camera,

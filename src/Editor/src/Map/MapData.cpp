@@ -65,10 +65,6 @@ std::string readFileToString(const std::string &path) {
   return buffer.str();
 }
 
-// Scope-based helper: collects the substring of `body` that belongs to the
-// value of the top-level key `key`. Returns empty string when key is missing.
-// This scopes further searches inside the matched block — the previous version
-// searched the entire JSON and could pick up `"name"` from a nested object.
 std::string extractBlock(const std::string &body, const std::string &key) {
   const std::string pattern = "\"" + key + "\"";
   size_t pos = body.find(pattern);
@@ -89,7 +85,6 @@ std::string extractBlock(const std::string &body, const std::string &key) {
   }
   char open = body[pos];
   if (open == '[' || open == '{') {
-    // Bracket-balanced slice.
     char close = (open == '[') ? ']' : '}';
     int depth = 0;
     bool inString = false;
@@ -148,7 +143,13 @@ std::string extractBlock(const std::string &body, const std::string &key) {
       }
     }
   }
-  return {};
+  
+  // Scalar number / bool
+  size_t start = pos;
+  while (pos < body.size() && body[pos] != ',' && body[pos] != '}' && body[pos] != ']' && !std::isspace(static_cast<unsigned char>(body[pos]))) {
+    ++pos;
+  }
+  return body.substr(start, pos - start);
 }
 
 std::string extractStringField(const std::string &body,
@@ -220,8 +221,6 @@ glm::quat extractQuatField(const std::string &body, const std::string &key,
   return result;
 }
 
-// Splits the body of a JSON array (without the surrounding brackets) into a
-// list of inner objects/arrays, respecting brace depth and string literals.
 std::vector<std::string> splitTopLevelBlocks(const std::string &arrayContent) {
   std::vector<std::string> items;
   int depth = 0;
@@ -284,7 +283,33 @@ TrackPoint parseTrackPoint(const std::string &json) {
   point.width = extractFloatField(json, "width", 12.0f);
   point.isFinish = extractBoolField(json, "is_finish", false);
   point.banking = extractFloatField(json, "banking", 0.0f);
+  std::string surfStr = extractStringField(json, "surface");
+  point.surface = trackSurfaceFromString(surfStr);
   return point;
+}
+
+StructureDef parseStructure(const std::string &json) {
+  StructureDef def;
+  def.id = extractStringField(json, "id");
+  def.name = extractStringField(json, "name");
+  std::string typeStr = extractStringField(json, "type");
+  def.type = StructureDef::typeFromString(typeStr);
+  def.category = static_cast<StructureCategory>(extractIntField(json, "category", 0));
+  def.position = extractVec3Field(json, "position");
+  def.rotation = extractQuatField(json, "rotation");
+  def.scale = extractVec3Field(json, "scale", glm::vec3(1.0f));
+  def.boundingBoxSize = extractVec3Field(json, "bbox", glm::vec3(4.0f, 3.0f, 4.0f));
+  def.maxHealth = extractFloatField(json, "max_health", 500.0f);
+  def.currentHealth = def.maxHealth;
+  def.armorRating = extractFloatField(json, "armor", 25.0f);
+  def.attackRange = extractFloatField(json, "range", 35.0f);
+  def.damagePerSecond = extractFloatField(json, "dps", 45.0f);
+  def.fireRate = extractFloatField(json, "fire_rate", 8.0f);
+  def.scrapCost = extractIntField(json, "scrap_cost", 100);
+  def.energyDrain = extractIntField(json, "energy_drain", 5);
+  def.teamId = extractIntField(json, "team", 0);
+  def.triggerTag = extractStringField(json, "tag");
+  return def;
 }
 
 void writeVec3(std::ostringstream &out, const glm::vec3 &value) {
@@ -304,32 +329,35 @@ void writeBool(std::ostringstream &out, bool value) {
 } // namespace
 
 void MapData::createDefault(uint32_t &idCounter) {
-  name = "New Map";
+  name = "Wasteland Highway & Base";
   version = CURRENT_VERSION;
-  author = "editor";
+  author = "Mad Architect";
   mode = MapMode::Both;
   lapCount = 3;
   terrainMesh.clear();
-  boundaryMin = glm::vec3(-500.0f, -50.0f, -500.0f);
-  boundaryMax = glm::vec3(500.0f, 200.0f, 500.0f);
+  boundaryMin = glm::vec3(-600.0f, -50.0f, -600.0f);
+  boundaryMax = glm::vec3(600.0f, 250.0f, 600.0f);
   objects.clear();
+  structures.clear();
   trackPoints.clear();
-  trackClosed = false;
+  trackClosed = true;
   trackHeight = 0.0f;
   isApproved = false;
   moderationStatus = "pending";
 
-  // Default oval: 8 points forming a closed ring 40m wide.
-  trackPoints.push_back(TrackPoint(glm::vec3(40.0f, 0.0f, 0.0f), 14.0f));
-  trackPoints.push_back(TrackPoint(glm::vec3(28.0f, 0.0f, 28.0f), 14.0f));
-  trackPoints.push_back(TrackPoint(glm::vec3(0.0f, 0.0f, 40.0f), 14.0f));
-  trackPoints.push_back(TrackPoint(glm::vec3(-28.0f, 0.0f, 28.0f), 14.0f));
-  trackPoints.push_back(TrackPoint(glm::vec3(-40.0f, 0.0f, 0.0f), 14.0f));
-  trackPoints.push_back(TrackPoint(glm::vec3(-28.0f, 0.0f, -28.0f), 14.0f));
-  trackPoints.push_back(TrackPoint(glm::vec3(0.0f, 0.0f, -40.0f), 14.0f));
-  trackPoints.push_back(TrackPoint(glm::vec3(28.0f, 0.0f, -28.0f), 14.0f));
-  trackClosed = true;
+  ugcRules.createDefaultRules();
 
+  // Default racing & arena track ring
+  trackPoints.push_back(TrackPoint(glm::vec3(60.0f, 0.0f, 0.0f), 16.0f, 0.0f, TrackSurfaceType::Asphalt));
+  trackPoints.push_back(TrackPoint(glm::vec3(45.0f, 2.0f, 45.0f), 16.0f, 5.0f, TrackSurfaceType::Asphalt));
+  trackPoints.push_back(TrackPoint(glm::vec3(0.0f, 5.0f, 65.0f), 18.0f, 10.0f, TrackSurfaceType::MetalGrate));
+  trackPoints.push_back(TrackPoint(glm::vec3(-45.0f, 2.0f, 45.0f), 16.0f, 5.0f, TrackSurfaceType::Dirt));
+  trackPoints.push_back(TrackPoint(glm::vec3(-60.0f, 0.0f, 0.0f), 16.0f, 0.0f, TrackSurfaceType::Dirt));
+  trackPoints.push_back(TrackPoint(glm::vec3(-45.0f, -1.0f, -45.0f), 16.0f, -5.0f, TrackSurfaceType::Mud));
+  trackPoints.push_back(TrackPoint(glm::vec3(0.0f, 0.0f, -60.0f), 18.0f, 0.0f, TrackSurfaceType::BoostSurface));
+  trackPoints.push_back(TrackPoint(glm::vec3(45.0f, 0.0f, -45.0f), 16.0f, 5.0f, TrackSurfaceType::Asphalt));
+
+  // Spawn grid
   const float rowSpacing = 8.0f;
   const float columnSpacing = 6.0f;
   for (int row = 1; row <= 2; ++row) {
@@ -344,13 +372,27 @@ void MapData::createDefault(uint32_t &idCounter) {
     }
   }
 
+  // Finish checkpoint
   MapObject checkpoint;
   checkpoint.id = generateObjectId(MapObjectType::Checkpoint, idCounter);
   checkpoint.type = MapObjectType::Checkpoint;
-  checkpoint.position = glm::vec3(40.0f, 0.0f, 0.0f);
-  checkpoint.radius = 12.0f;
+  checkpoint.position = glm::vec3(60.0f, 0.0f, 0.0f);
+  checkpoint.radius = 14.0f;
   checkpoint.isFinishLine = true;
   objects.push_back(checkpoint);
+
+  // Default Base Structures
+  StructureDef wall1 = StructureDef::createPreset(StructureType::FortifiedWall, glm::vec3(20.0f, 0.0f, 20.0f));
+  wall1.id = "struct_wall_01";
+  structures.push_back(wall1);
+
+  StructureDef turret1 = StructureDef::createPreset(StructureType::AutoMinigunTurret, glm::vec3(25.0f, 0.0f, 25.0f));
+  turret1.id = "struct_turret_01";
+  structures.push_back(turret1);
+
+  StructureDef bay = StructureDef::createPreset(StructureType::RepairBay, glm::vec3(15.0f, 0.0f, 25.0f));
+  bay.id = "struct_repair_01";
+  structures.push_back(bay);
 }
 
 void MapData::addObject(const MapObject &object) { objects.push_back(object); }
@@ -379,12 +421,41 @@ const MapObject *MapData::findObject(const std::string &id) const {
   return it != objects.end() ? &(*it) : nullptr;
 }
 
+void MapData::addStructure(const StructureDef &structure) {
+  structures.push_back(structure);
+}
+
+bool MapData::removeStructure(const std::string &id) {
+  auto it = std::find_if(structures.begin(), structures.end(),
+                         [&](const StructureDef &s) { return s.id == id; });
+  if (it == structures.end()) {
+    return false;
+  }
+  structures.erase(it);
+  return true;
+}
+
+StructureDef *MapData::findStructure(const std::string &id) {
+  auto it = std::find_if(structures.begin(), structures.end(),
+                         [&](StructureDef &s) { return s.id == id; });
+  return it != structures.end() ? &(*it) : nullptr;
+}
+
+const StructureDef *MapData::findStructure(const std::string &id) const {
+  auto it = std::find_if(structures.begin(), structures.end(),
+                         [&](const StructureDef &s) { return s.id == id; });
+  return it != structures.end() ? &(*it) : nullptr;
+}
+
 std::string MapData::generateObjectId(MapObjectType type,
                                       uint32_t &counter) const {
-  static const char *prefixes[] = {"spawn",        "checkpoint", "powerup",
-                                   "destructible", "obstacle",   "decoration"};
+  static const char *prefixes[] = {
+      "spawn",        "checkpoint", "powerup", "destructible",
+      "obstacle",     "decoration", "struct",  "trigger",
+      "hazard",       "jumppad"
+  };
   int index = static_cast<int>(type);
-  if (index < 0 || index >= 6) {
+  if (index < 0 || index >= 10) {
     index = 5;
   }
   return prefixes[index] + std::string("_") + std::to_string(counter++);
@@ -404,6 +475,14 @@ std::string MapData::typeToString(MapObjectType type) {
     return "obstacle";
   case MapObjectType::Decoration:
     return "decoration";
+  case MapObjectType::Structure:
+    return "structure";
+  case MapObjectType::TriggerZone:
+    return "trigger_zone";
+  case MapObjectType::HazardCrusher:
+    return "hazard_crusher";
+  case MapObjectType::JumpPad:
+    return "jump_pad";
   default:
     return "decoration";
   }
@@ -420,6 +499,14 @@ MapObjectType MapData::typeFromString(const std::string &value) {
     return MapObjectType::Destructible;
   if (value == "obstacle")
     return MapObjectType::Obstacle;
+  if (value == "structure")
+    return MapObjectType::Structure;
+  if (value == "trigger_zone")
+    return MapObjectType::TriggerZone;
+  if (value == "hazard_crusher")
+    return MapObjectType::HazardCrusher;
+  if (value == "jump_pad")
+    return MapObjectType::JumpPad;
   return MapObjectType::Decoration;
 }
 
@@ -431,10 +518,6 @@ bool MapData::saveToFile(const std::string &path) const {
   out << "  \"author\": \"" << escapeJson(author) << "\",\n";
   out << "  \"mode\": \"" << mapModeToString(mode) << "\",\n";
   out << "  \"lap_count\": " << lapCount << ",\n";
-  out << "  \"terrain\": {\n";
-  out << "    \"mesh\": \"" << escapeJson(terrainMesh) << "\",\n";
-  out << "    \"collision\": true\n";
-  out << "  },\n";
   out << "  \"boundaries\": {\n";
   out << "    \"min\": ";
   writeVec3(out, boundaryMin);
@@ -455,7 +538,8 @@ bool MapData::saveToFile(const std::string &path) const {
     out << ",\n        \"width\": " << p.width;
     out << ",\n        \"is_finish\": ";
     writeBool(out, p.isFinish);
-    out << ",\n        \"banking\": " << p.banking << "\n";
+    out << ",\n        \"banking\": " << p.banking;
+    out << ",\n        \"surface\": \"" << trackSurfaceToString(p.surface) << "\"\n";
     out << "      }";
   }
   if (!trackPoints.empty())
@@ -467,8 +551,38 @@ bool MapData::saveToFile(const std::string &path) const {
   out << "    \"approved\": ";
   writeBool(out, isApproved);
   out << "\n  },\n";
-  out << "  \"objects\": [\n";
+  
+  // Structures Array
+  out << "  \"structures\": [\n";
+  for (size_t i = 0; i < structures.size(); ++i) {
+    const StructureDef &s = structures[i];
+    out << "    {\n";
+    out << "      \"id\": \"" << escapeJson(s.id) << "\",\n";
+    out << "      \"name\": \"" << escapeJson(s.name) << "\",\n";
+    out << "      \"type\": \"" << StructureDef::typeToString(s.type) << "\",\n";
+    out << "      \"category\": " << static_cast<int>(s.category) << ",\n";
+    out << "      \"position\": ";
+    writeVec3(out, s.position);
+    out << ",\n      \"rotation\": ";
+    writeQuat(out, s.rotation);
+    out << ",\n      \"scale\": ";
+    writeVec3(out, s.scale);
+    out << ",\n      \"max_health\": " << s.maxHealth;
+    out << ",\n      \"armor\": " << s.armorRating;
+    out << ",\n      \"range\": " << s.attackRange;
+    out << ",\n      \"dps\": " << s.damagePerSecond;
+    out << ",\n      \"scrap_cost\": " << s.scrapCost;
+    out << ",\n      \"energy_drain\": " << s.energyDrain;
+    out << ",\n      \"team\": " << s.teamId << ",\n";
+    out << "      \"tag\": \"" << escapeJson(s.triggerTag) << "\"\n";
+    out << "    }";
+    if (i + 1 < structures.size()) out << ",";
+    out << "\n";
+  }
+  out << "  ],\n";
 
+  // Objects Array
+  out << "  \"objects\": [\n";
   for (size_t i = 0; i < objects.size(); ++i) {
     const MapObject &object = objects[i];
     out << "    {\n";
@@ -491,7 +605,6 @@ bool MapData::saveToFile(const std::string &path) const {
     }
     out << "\n";
   }
-
   out << "  ]\n";
   out << "}\n";
 
@@ -506,7 +619,8 @@ bool MapData::saveToFile(const std::string &path) const {
     return false;
   }
   file << out.str();
-  LOG_INFOF("Saved map to %s", path.c_str());
+  LOG_INFOF("Saved advanced map to %s (Objects: %zu, Structures: %zu, Track: %zu)",
+            path.c_str(), objects.size(), structures.size(), trackPoints.size());
   return true;
 }
 
@@ -518,11 +632,6 @@ bool MapData::loadFromFile(const std::string &path) {
   }
 
   lapCount = extractIntField(json, "lap_count", 3);
-  if (lapCount < 1)
-    lapCount = 1;
-  if (lapCount > 20)
-    lapCount = 20;
-
   name = extractStringField(json, "name");
   if (name.empty()) {
     name = "Loaded Map";
@@ -532,11 +641,6 @@ bool MapData::loadFromFile(const std::string &path) {
   {
     const std::string modeStr = extractStringField(json, "mode");
     mode = mapModeFromString(modeStr.empty() ? "both" : modeStr);
-  }
-
-  const std::string terrainBlock = extractBlock(json, "terrain");
-  if (!terrainBlock.empty()) {
-    terrainMesh = extractStringField(terrainBlock, "mesh");
   }
 
   const std::string boundariesBlock = extractBlock(json, "boundaries");
@@ -559,21 +663,23 @@ bool MapData::loadFromFile(const std::string &path) {
     }
   }
 
+  structures.clear();
+  const std::string structBlock = extractBlock(json, "structures");
+  if (!structBlock.empty() && structBlock.front() == '[') {
+    const std::string inner = structBlock.substr(1, structBlock.size() - 2);
+    for (const std::string &item : splitTopLevelBlocks(inner)) {
+      StructureDef s = parseStructure(item);
+      if (!s.id.empty()) {
+        structures.push_back(s);
+      }
+    }
+  }
+
   objects.clear();
   const std::string moderationBlock = extractBlock(json, "moderation");
   if (!moderationBlock.empty()) {
     moderationStatus = extractStringField(moderationBlock, "status");
-    if (moderationStatus != "pending" && moderationStatus != "approved" &&
-        moderationStatus != "rejected") {
-      moderationStatus = "pending";
-    }
-    isApproved = extractBoolField(moderationBlock, "approved", false);
-    // Self-heal: keep isApproved consistent with the string flag.
     isApproved = (moderationStatus == "approved");
-  } else if (version < 2) {
-    // Pre-v2 maps never carried moderation fields; treat as pending.
-    isApproved = false;
-    moderationStatus = "pending";
   }
 
   const std::string objectsBlock = extractBlock(json, "objects");
@@ -587,8 +693,8 @@ bool MapData::loadFromFile(const std::string &path) {
     }
   }
 
-  LOG_INFOF("Loaded map '%s' with %zu objects and %zu track points from %s",
-            name.c_str(), objects.size(), trackPoints.size(), path.c_str());
+  LOG_INFOF("Loaded map '%s' (Objects: %zu, Structures: %zu, Track: %zu) from %s",
+            name.c_str(), objects.size(), structures.size(), trackPoints.size(), path.c_str());
   return true;
 }
 
